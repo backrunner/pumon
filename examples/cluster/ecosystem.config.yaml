@@ -1,0 +1,7 @@
+apps:
+  - name: cluster-placeholder
+    script: server.js
+    cwd: .
+    exec_mode: cluster
+    instances: 2
+

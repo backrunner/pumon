@@ -1,0 +1,11 @@
+{
+  "apps": [
+    {
+      "name": "ts-loader-fixture",
+      "script": "server.ts",
+      "interpreter": "tsx",
+      "cwd": "."
+    }
+  ]
+}
+

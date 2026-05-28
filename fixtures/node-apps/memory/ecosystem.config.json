@@ -1,0 +1,11 @@
+{
+  "apps": [
+    {
+      "name": "memory-fixture",
+      "script": "server.js",
+      "cwd": ".",
+      "max_memory_restart": "64M"
+    }
+  ]
+}
+

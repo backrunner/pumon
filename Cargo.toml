@@ -1,0 +1,32 @@
+[workspace]
+members = [
+  "crates/promon-cli",
+  "crates/promon-core",
+  "crates/promon-config",
+  "crates/promon-node-support",
+  "crates/promon-process",
+  "crates/promon-logging",
+  "crates/promon-platform",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["BackRunner <dev@backrunner.top>"]
+repository = "https://github.com/backrunner/promon"
+
+[workspace.dependencies]
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+directories = "6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
+toml = "0.9"
+which = "8.0"
+

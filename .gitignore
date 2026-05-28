@@ -1,0 +1,8 @@
+/target/
+/node_modules/
+/.promon/
+/.DS_Store
+/packages/*/node_modules/
+/packages/*/dist/*.map
+*.log
+

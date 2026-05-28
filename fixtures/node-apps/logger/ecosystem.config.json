@@ -1,0 +1,10 @@
+{
+  "apps": [
+    {
+      "name": "logger-fixture",
+      "script": "server.js",
+      "cwd": "."
+    }
+  ]
+}
+

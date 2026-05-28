@@ -1,0 +1,10 @@
+{
+  "apps": [
+    {
+      "name": "crash-fixture",
+      "script": "server.js",
+      "cwd": "."
+    }
+  ]
+}
+

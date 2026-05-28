@@ -1,0 +1,8 @@
+{
+  "name": "package-script-fixture",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
+

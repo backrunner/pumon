@@ -1,0 +1,8 @@
+{
+  "name": "promon-package-script-example",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  }
+}
+

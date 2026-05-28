@@ -1,0 +1,13 @@
+{
+  "apps": [
+    {
+      "name": "basic-js",
+      "script": "server.js",
+      "cwd": ".",
+      "env": {
+        "PORT": "3101"
+      }
+    }
+  ]
+}
+

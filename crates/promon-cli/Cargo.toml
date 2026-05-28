@@ -1,0 +1,22 @@
+[package]
+name = "promon-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "promon"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+promon-config = { path = "../promon-config" }
+promon-core = { path = "../promon-core" }
+promon-node-support = { path = "../promon-node-support" }
+promon-platform = { path = "../promon-platform" }
+promon-process = { path = "../promon-process" }
+serde_json.workspace = true
+tokio.workspace = true
+

@@ -1,0 +1,13 @@
+{
+  "apps": [
+    {
+      "name": "watcher-fixture",
+      "script": "server.js",
+      "cwd": ".",
+      "watch": {
+        "enabled": true
+      }
+    }
+  ]
+}
+

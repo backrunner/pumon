@@ -1,0 +1,16 @@
+[package]
+name = "promon-node-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+promon-core = { path = "../promon-core" }
+promon-platform = { path = "../promon-platform" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+which.workspace = true
+

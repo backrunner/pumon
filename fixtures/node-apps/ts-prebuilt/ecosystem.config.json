@@ -1,0 +1,10 @@
+{
+  "apps": [
+    {
+      "name": "ts-prebuilt-fixture",
+      "script": "dist/server.js",
+      "cwd": "."
+    }
+  ]
+}
+
