@@ -931,17 +931,11 @@ async fn logs(name: Option<String>, lines: usize, follow: bool, json: bool) -> R
         for process in list_apps().await? {
             offsets.insert(
                 process.out_log.clone(),
-                tokio::fs::metadata(&process.out_log)
-                    .await
-                    .map(|meta| meta.len())
-                    .unwrap_or(0),
+                log_follow_state(&process.out_log).await,
             );
             offsets.insert(
                 process.err_log.clone(),
-                tokio::fs::metadata(&process.err_log)
-                    .await
-                    .map(|meta| meta.len())
-                    .unwrap_or(0),
+                log_follow_state(&process.err_log).await,
             );
         }
         loop {
@@ -2822,22 +2816,57 @@ async fn print_new_log_bytes(
     name: &str,
     stream: &str,
     path: &PathBuf,
-    offsets: &mut std::collections::BTreeMap<PathBuf, u64>,
+    offsets: &mut std::collections::BTreeMap<PathBuf, LogFollowState>,
 ) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
     let bytes = tokio::fs::read(path).await?;
-    let previous = *offsets.get(path).unwrap_or(&0) as usize;
+    let previous = follow_start_offset(offsets.get(path), &bytes);
     if bytes.len() <= previous {
+        offsets.insert(path.clone(), LogFollowState::from_bytes(&bytes));
         return Ok(());
     }
     let text = String::from_utf8_lossy(&bytes[previous..]);
     for line in text.lines() {
         println!("{name} {stream} | {line}");
     }
-    offsets.insert(path.clone(), bytes.len() as u64);
+    offsets.insert(path.clone(), LogFollowState::from_bytes(&bytes));
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct LogFollowState {
+    offset: usize,
+    prefix: Vec<u8>,
+}
+
+impl LogFollowState {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            offset: bytes.len(),
+            prefix: log_prefix(bytes),
+        }
+    }
+}
+
+async fn log_follow_state(path: &PathBuf) -> LogFollowState {
+    let bytes = tokio::fs::read(path).await.unwrap_or_default();
+    LogFollowState::from_bytes(&bytes)
+}
+
+fn follow_start_offset(previous: Option<&LogFollowState>, bytes: &[u8]) -> usize {
+    let Some(previous) = previous else {
+        return 0;
+    };
+    if bytes.len() < previous.offset || !bytes.starts_with(&previous.prefix) {
+        return 0;
+    }
+    previous.offset
+}
+
+fn log_prefix(bytes: &[u8]) -> Vec<u8> {
+    bytes.iter().take(64).copied().collect()
 }
 
 struct WatchedApp {
@@ -3030,6 +3059,27 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn log_follow_continues_from_previous_offset_for_append() {
+        let previous = LogFollowState::from_bytes(b"prefix\n");
+        assert_eq!(follow_start_offset(Some(&previous), b"prefix\nnext\n"), 7);
+    }
+
+    #[test]
+    fn log_follow_restarts_after_truncation() {
+        let previous = LogFollowState::from_bytes(b"prefix\nlonger\n");
+        assert_eq!(follow_start_offset(Some(&previous), b"new\n"), 0);
+    }
+
+    #[test]
+    fn log_follow_restarts_after_rotation_replacement() {
+        let previous = LogFollowState::from_bytes(b"old-prefix\n");
+        assert_eq!(
+            follow_start_offset(Some(&previous), b"new-prefix\nwith enough bytes\n"),
+            0
+        );
     }
 
     fn temp_dir(name: &str) -> PathBuf {
