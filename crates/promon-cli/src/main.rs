@@ -621,7 +621,7 @@ fn service_backend_name() -> &'static str {
     }
     #[cfg(windows)]
     {
-        "windows-service-placeholder"
+        "windows-service"
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
@@ -2389,7 +2389,7 @@ async fn service_status_snapshot() -> Result<ServiceStatusSnapshot> {
             active: None,
             enabled: None,
             detail: Some(
-                "Windows native service registration is not available in this MVP backend"
+                "Windows native service registration is not yet implemented in this MVP"
                     .to_string(),
             ),
         });
@@ -2457,7 +2457,7 @@ fn service_file_content(exe: &std::path::Path, config: &std::path::Path) -> Resu
     #[cfg(windows)]
     {
         return Ok(format!(
-            "Promon service command:\n{} daemon run {}\nUse a Windows service wrapper or the future native daemon service backend to register this command.\n",
+            "Promon service command:\n{} daemon run {}\nUse a Windows service wrapper to register this command for now.\n",
             exe.display(),
             config.display()
         ));
@@ -2539,7 +2539,7 @@ async fn service_start_command(path: &std::path::Path) -> Result<String> {
     {
         let _ = path;
         return Ok(
-            "Windows native service registration is not available in this MVP backend".to_string(),
+            "Windows native service registration is not yet implemented in this MVP".to_string(),
         );
     }
 }
@@ -2589,7 +2589,7 @@ async fn service_stop_command(path: &std::path::Path) -> Result<String> {
     {
         let _ = path;
         return Ok(
-            "Windows native service registration is not available in this MVP backend".to_string(),
+            "Windows native service registration is not yet implemented in this MVP".to_string(),
         );
     }
 }

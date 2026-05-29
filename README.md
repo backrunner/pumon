@@ -7,9 +7,20 @@ This repository currently contains the first MVP implementation:
 - `promon init`
 - `promon validate`
 - `promon doctor`
+- `promon prune`
 - `promon start`
+- `promon start --wait`
 - `promon stop`
+- `promon restart`
+- `promon reload`
+- `promon scale`
+- `promon status`
 - `promon list`
+- `promon logs`
+- `promon watch`
+- `promon daemon`
+- `promon service`
+- `promon tui`
 
 Current implemented surface:
 
@@ -23,3 +34,4 @@ Current implemented surface:
 - Background daemon wrapper for `start --wait`.
 - Minimal terminal process dashboard.
 - GitHub Release and npm wrapper scaffolding.
+- Stale process pruning.
