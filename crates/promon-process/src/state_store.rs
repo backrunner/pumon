@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use promon_core::{ManagedProcess, PromonError, PromonResult};
+use promon_core::{ManagedProcess, PromonError, PromonResult, ResolvedAppSpec};
 use promon_platform::state_dir;
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -10,42 +11,24 @@ fn state_file() -> PathBuf {
     state_dir().join("processes.json")
 }
 
+fn desired_state_file() -> PathBuf {
+    state_dir().join("desired-apps.json")
+}
+
 pub async fn load_processes() -> PromonResult<Vec<ManagedProcess>> {
-    let path = state_file();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = fs::read_to_string(&path).await.map_err(PromonError::Io)?;
-    match serde_json::from_str(&raw) {
-        Ok(processes) => Ok(processes),
-        Err(_) => {
-            backup_corrupt_state(&path, &raw).await?;
-            Ok(Vec::new())
-        }
-    }
+    load_json_vec(state_file(), "processes").await
 }
 
 pub async fn save_processes(processes: &[ManagedProcess]) -> PromonResult<()> {
-    let dir = state_dir();
-    fs::create_dir_all(&dir).await.map_err(PromonError::Io)?;
-    let raw = serde_json::to_string_pretty(processes).map_err(PromonError::Json)?;
-    let tmp = dir.join(format!(
-        "processes.json.tmp.{}.{}",
-        std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    let mut file = fs::File::create(&tmp).await.map_err(PromonError::Io)?;
-    file.write_all(raw.as_bytes())
-        .await
-        .map_err(PromonError::Io)?;
-    file.sync_all().await.map_err(PromonError::Io)?;
-    drop(file);
-    if let Err(error) = fs::rename(&tmp, state_file()).await {
-        let _ = fs::remove_file(&tmp).await;
-        return Err(PromonError::Io(error));
-    }
-    sync_parent_dir(&dir);
-    Ok(())
+    save_json(state_file(), processes).await
+}
+
+pub async fn load_desired_apps() -> PromonResult<Vec<ResolvedAppSpec>> {
+    load_json_vec(desired_state_file(), "desired-apps").await
+}
+
+pub async fn save_desired_apps(apps: &[ResolvedAppSpec]) -> PromonResult<()> {
+    save_json(desired_state_file(), apps).await
 }
 
 pub async fn upsert_process(process: ManagedProcess) -> PromonResult<()> {
@@ -65,9 +48,56 @@ pub async fn remove_process(name: &str) -> PromonResult<Option<ManagedProcess>> 
     Ok(removed)
 }
 
-async fn backup_corrupt_state(path: &Path, raw: &str) -> PromonResult<()> {
+async fn load_json_vec<T>(path: PathBuf, backup_prefix: &str) -> PromonResult<Vec<T>>
+where
+    T: DeserializeOwned,
+{
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = fs::read_to_string(&path).await.map_err(PromonError::Io)?;
+    match serde_json::from_str(&raw) {
+        Ok(processes) => Ok(processes),
+        Err(_) => {
+            backup_corrupt_state(&path, backup_prefix, &raw).await?;
+            Ok(Vec::new())
+        }
+    }
+}
+
+async fn save_json<T>(path: PathBuf, value: &T) -> PromonResult<()>
+where
+    T: Serialize + ?Sized,
+{
+    let dir = state_dir();
+    fs::create_dir_all(&dir).await.map_err(PromonError::Io)?;
+    let raw = serde_json::to_string_pretty(value).map_err(PromonError::Json)?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("state.json");
+    let tmp = dir.join(format!(
+        "{file_name}.tmp.{}.{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    let mut file = fs::File::create(&tmp).await.map_err(PromonError::Io)?;
+    file.write_all(raw.as_bytes())
+        .await
+        .map_err(PromonError::Io)?;
+    file.sync_all().await.map_err(PromonError::Io)?;
+    drop(file);
+    if let Err(error) = fs::rename(&tmp, path).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(PromonError::Io(error));
+    }
+    sync_parent_dir(&dir);
+    Ok(())
+}
+
+async fn backup_corrupt_state(path: &Path, prefix: &str, raw: &str) -> PromonResult<()> {
     let backup = state_dir().join(format!(
-        "processes.corrupt.{}.json",
+        "{prefix}.corrupt.{}.json",
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     ));
     match fs::rename(path, &backup).await {
@@ -88,11 +118,20 @@ fn sync_parent_dir(dir: &Path) {
 mod tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
+    use std::sync::OnceLock;
 
-    use promon_core::{ProcessStatus, RuntimeCommand};
+    use promon_core::{
+        ExecMode, Instances, LogPolicy, ProcessStatus, RestartPolicy, RuntimeCommand, WatchSpec,
+    };
     use promon_platform::state_dir;
 
     use super::*;
+
+    static ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static tokio::sync::Mutex<()> {
+        ENV_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
 
     struct PromonHomeGuard {
         previous: Option<OsString>,
@@ -125,6 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn saves_atomically_and_recovers_corrupt_state() {
+        let _lock = env_lock().lock().await;
         let _guard = PromonHomeGuard::install("roundtrip-corrupt");
         let process = ManagedProcess {
             name: "app".to_string(),
@@ -189,6 +229,43 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(backups[0].path()).expect("backup should be readable"),
             "{bad-json"
+        );
+    }
+
+    #[tokio::test]
+    async fn saves_and_loads_desired_apps() {
+        let _lock = env_lock().lock().await;
+        let _guard = PromonHomeGuard::install("desired-apps");
+        let app = ResolvedAppSpec {
+            name: "api".to_string(),
+            script: Some(PathBuf::from("server.js")),
+            command: None,
+            cwd: PathBuf::from("/tmp/api"),
+            args: vec!["--port".to_string(), "3000".to_string()],
+            node_args: vec![],
+            interpreter: "node".to_string(),
+            interpreter_args: vec![],
+            package_manager: None,
+            package_script: None,
+            env: BTreeMap::from([("NODE_ENV".to_string(), "test".to_string())]),
+            exec_mode: ExecMode::Fork,
+            instances: Instances::Count(1),
+            watch: WatchSpec::default(),
+            restart: RestartPolicy::default(),
+            max_memory_restart: None,
+            cron_restart: None,
+            log: LogPolicy::default(),
+        };
+
+        save_desired_apps(std::slice::from_ref(&app))
+            .await
+            .expect("desired app save should succeed");
+
+        assert_eq!(
+            load_desired_apps()
+                .await
+                .expect("desired app load should succeed"),
+            vec![app]
         );
     }
 }

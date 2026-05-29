@@ -7,7 +7,10 @@ use promon_core::{AppSpec, Instances, PromonConfig, ResolvedAppSpec};
 use promon_logging::tail_file;
 use promon_node_support::validate_runtime;
 use promon_platform::{find_program, promon_home};
-use promon_process::{list_apps, restart_app, run_app_foreground, start_app, stop_all, stop_app};
+use promon_process::{
+    list_apps, load_desired_apps, restart_app, run_app_foreground, save_desired_apps, start_app,
+    stop_all, stop_app,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
@@ -136,6 +139,7 @@ struct IpcEnvelope {
 enum IpcRequest {
     Ping,
     List,
+    Shutdown,
     Stop { name: String },
     Start { config: PathBuf },
     StartApps { apps: Vec<ResolvedAppSpec> },
@@ -532,10 +536,7 @@ async fn daemon_stop(json: bool) -> Result<()> {
         }
         return Ok(());
     };
-    let _ = send_ipc(IpcRequest::Stop {
-        name: "all".to_string(),
-    })
-    .await;
+    let _ = send_ipc(IpcRequest::Shutdown).await;
     promon_platform::terminate_process(pid).await?;
     wait_for_process_exit(pid, 30, std::time::Duration::from_millis(100)).await;
     if promon_platform::is_process_alive(pid) {
@@ -612,11 +613,14 @@ async fn daemon_ipc(request: IpcRequest, json: bool) -> Result<()> {
 }
 
 async fn daemon_run(config: PathBuf) -> Result<()> {
-    let apps = load_config(&config).await?;
+    let config_apps = load_config(&config).await?;
+    let mut apps = load_desired_apps().await?;
+    merge_app_specs(&mut apps, config_apps);
     for app in &apps {
         validate_runtime(app)?;
         start_app(app).await?;
     }
+    save_desired_apps(&apps).await?;
     let desired = Arc::new(Mutex::new(apps));
 
     let listener = bind_ipc().await?;
@@ -815,20 +819,44 @@ async fn handle_ipc(stream: IpcStream, desired: DesiredApps) -> Result<()> {
                 }
                 Err(error) => error_response(request_id, error.to_string()),
             },
+            IpcRequest::Shutdown => match stop_all().await {
+                Ok(processes) => {
+                    ok_response(request_id, serde_json::json!({ "stopped": processes }))
+                }
+                Err(error) => error_response(request_id, error.to_string()),
+            },
             IpcRequest::Stop { name } => {
                 if name == "all" {
                     match stop_all().await {
                         Ok(processes) => {
-                            desired.lock().await.clear();
-                            ok_response(request_id, serde_json::json!({ "stopped": processes }))
+                            {
+                                desired.lock().await.clear();
+                            }
+                            match save_desired_apps(&Vec::<ResolvedAppSpec>::new()).await {
+                                Ok(()) => ok_response(
+                                    request_id,
+                                    serde_json::json!({ "stopped": processes }),
+                                ),
+                                Err(error) => error_response(request_id, error.to_string()),
+                            }
                         }
                         Err(error) => error_response(request_id, error.to_string()),
                     }
                 } else {
                     match stop_app(&name).await {
                         Ok(process) => {
-                            desired.lock().await.retain(|app| app.name != name);
-                            ok_response(request_id, serde_json::json!({ "stopped": process }))
+                            let next = {
+                                let mut locked = desired.lock().await;
+                                locked.retain(|app| app.name != name);
+                                locked.clone()
+                            };
+                            match save_desired_apps(&next).await {
+                                Ok(()) => ok_response(
+                                    request_id,
+                                    serde_json::json!({ "stopped": process }),
+                                ),
+                                Err(error) => error_response(request_id, error.to_string()),
+                            }
                         }
                         Err(error) => error_response(request_id, error.to_string()),
                     }
@@ -873,8 +901,10 @@ async fn start_desired_apps(
             Err(error) => return error_response(request_id, error.to_string()),
         }
     }
-    merge_desired_apps(desired, apps).await;
-    ok_response(request_id, serde_json::json!({ "started": started }))
+    match merge_desired_apps(desired, apps).await {
+        Ok(()) => ok_response(request_id, serde_json::json!({ "started": started })),
+        Err(error) => error_response(request_id, error.to_string()),
+    }
 }
 
 async fn restart_desired_apps(
@@ -892,8 +922,10 @@ async fn restart_desired_apps(
             Err(error) => return error_response(request_id, error.to_string()),
         }
     }
-    merge_desired_apps(desired, apps).await;
-    ok_response(request_id, serde_json::json!({ "restarted": restarted }))
+    match merge_desired_apps(desired, apps).await {
+        Ok(()) => ok_response(request_id, serde_json::json!({ "restarted": restarted })),
+        Err(error) => error_response(request_id, error.to_string()),
+    }
 }
 
 fn ok_response(request_id: String, payload: serde_json::Value) -> IpcResponse {
@@ -906,11 +938,20 @@ fn ok_response(request_id: String, payload: serde_json::Value) -> IpcResponse {
     }
 }
 
-async fn merge_desired_apps(desired: DesiredApps, apps: Vec<ResolvedAppSpec>) {
-    let mut locked = desired.lock().await;
+async fn merge_desired_apps(desired: DesiredApps, apps: Vec<ResolvedAppSpec>) -> Result<()> {
+    let next = {
+        let mut locked = desired.lock().await;
+        merge_app_specs(&mut locked, apps);
+        locked.clone()
+    };
+    save_desired_apps(&next).await?;
+    Ok(())
+}
+
+fn merge_app_specs(existing: &mut Vec<ResolvedAppSpec>, apps: Vec<ResolvedAppSpec>) {
     for app in apps {
-        locked.retain(|existing| existing.name != app.name);
-        locked.push(app);
+        existing.retain(|item| item.name != app.name);
+        existing.push(app);
     }
 }
 
