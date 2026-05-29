@@ -13,6 +13,10 @@ on:
           - beta
           - alpha
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -22,8 +26,6 @@ jobs:
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
       - run: npm publish --tag "${{ inputs.tag }}"
         working-directory: packages/pumon
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
