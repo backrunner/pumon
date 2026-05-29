@@ -8,6 +8,8 @@ use promon_logging::tail_file;
 use promon_node_support::validate_runtime;
 use promon_platform::{find_program, promon_home};
 use promon_process::{list_apps, restart_app, run_app_foreground, start_app, stop_all, stop_app};
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Debug, Parser)]
 #[command(name = "promon", version, about = "Rust-first Node.js process manager")]
@@ -97,15 +99,42 @@ async fn main() -> Result<()> {
 #[derive(Debug, Subcommand)]
 enum ServiceCommand {
     Install { config: Option<PathBuf> },
+    Start,
+    Stop,
     Uninstall,
     Status,
 }
 
 #[derive(Debug, Subcommand)]
 enum DaemonCommand {
-    Start { config: Option<PathBuf> },
+    Start {
+        config: Option<PathBuf>,
+    },
     Stop,
     Status,
+    Ping,
+    List,
+    #[command(hide = true)]
+    Run {
+        config: PathBuf,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum IpcRequest {
+    Ping,
+    List,
+    Stop { name: String },
+    Start { config: PathBuf },
+    Restart { config: PathBuf },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct IpcResponse {
+    ok: bool,
+    payload: serde_json::Value,
+    error: Option<String>,
 }
 
 async fn init(output: PathBuf, json: bool) -> Result<()> {
@@ -389,6 +418,8 @@ async fn list(json: bool) -> Result<()> {
 async fn service(command: ServiceCommand, json: bool) -> Result<()> {
     match command {
         ServiceCommand::Install { config } => service_install(config, json).await,
+        ServiceCommand::Start => service_start(json).await,
+        ServiceCommand::Stop => service_stop(json).await,
         ServiceCommand::Uninstall => service_uninstall(json).await,
         ServiceCommand::Status => service_status(json).await,
     }
@@ -399,6 +430,9 @@ async fn daemon(command: DaemonCommand, json: bool) -> Result<()> {
         DaemonCommand::Start { config } => daemon_start(config, json).await,
         DaemonCommand::Stop => daemon_stop(json).await,
         DaemonCommand::Status => daemon_status(json).await,
+        DaemonCommand::Ping => daemon_ipc(IpcRequest::Ping, json).await,
+        DaemonCommand::List => daemon_ipc(IpcRequest::List, json).await,
+        DaemonCommand::Run { config } => daemon_run(config).await,
     }
 }
 
@@ -413,8 +447,8 @@ async fn daemon_start(config: Option<PathBuf>, json: bool) -> Result<()> {
         .open(dir.join("daemon.log"))?;
     let err = log.try_clone()?;
     let child = std::process::Command::new(exe)
-        .arg("start")
-        .arg("--wait")
+        .arg("daemon")
+        .arg("run")
         .arg(&config)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
@@ -436,6 +470,10 @@ async fn daemon_stop(json: bool) -> Result<()> {
         .await?
         .trim()
         .parse::<u32>()?;
+    let _ = send_ipc(IpcRequest::Stop {
+        name: "all".to_string(),
+    })
+    .await;
     promon_platform::terminate_process(pid).await?;
     let _ = tokio::fs::remove_file(&pid_path).await;
     if json {
@@ -462,6 +500,61 @@ async fn daemon_status(json: bool) -> Result<()> {
         );
     } else {
         println!("promon daemon not started");
+    }
+    Ok(())
+}
+
+async fn daemon_ipc(request: IpcRequest, json: bool) -> Result<()> {
+    let response = send_ipc(request).await?;
+    if json {
+        print_json(serde_json::to_value(response)?)?;
+    } else if response.ok {
+        println!("{}", serde_json::to_string_pretty(&response.payload)?);
+    } else {
+        anyhow::bail!(response
+            .error
+            .unwrap_or_else(|| "daemon request failed".to_string()));
+    }
+    Ok(())
+}
+
+async fn daemon_run(config: PathBuf) -> Result<()> {
+    let apps = load_config(&config).await?;
+    for app in &apps {
+        validate_runtime(app)?;
+        start_app(app).await?;
+    }
+
+    let listener = bind_ipc().await?;
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                for app in &apps {
+                    let processes = list_apps().await?;
+                    let alive = processes.iter().any(|process| {
+                        process.name == app.name && matches!(process.status, promon_core::ProcessStatus::Running)
+                    });
+                    if !alive && app.restart.autorestart {
+                        let _ = start_app(app).await;
+                    }
+                }
+            }
+            result = accept_ipc(&listener) => {
+                if let Ok(stream) = result {
+                    let apps = apps.clone();
+                    tokio::spawn(async move {
+                        let _ = handle_ipc(stream, apps).await;
+                    });
+                }
+            }
+            _ = &mut shutdown => {
+                let _ = stop_all().await;
+                break;
+            },
+        }
     }
     Ok(())
 }
@@ -495,6 +588,212 @@ async fn tui() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+type IpcListener = tokio::net::UnixListener;
+#[cfg(unix)]
+type IpcStream = tokio::net::UnixStream;
+
+#[cfg(windows)]
+type IpcListener = tokio::net::TcpListener;
+#[cfg(windows)]
+type IpcStream = tokio::net::TcpStream;
+
+#[cfg(unix)]
+async fn bind_ipc() -> Result<IpcListener> {
+    let path = ipc_path();
+    if path.exists() {
+        let _ = tokio::fs::remove_file(&path).await;
+    }
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    Ok(tokio::net::UnixListener::bind(path)?)
+}
+
+#[cfg(windows)]
+async fn bind_ipc() -> Result<IpcListener> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    if let Some(parent) = ipc_path().parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(ipc_path(), addr.to_string()).await?;
+    Ok(listener)
+}
+
+async fn accept_ipc(listener: &IpcListener) -> Result<IpcStream> {
+    #[cfg(unix)]
+    {
+        let (stream, _) = listener.accept().await?;
+        Ok(stream)
+    }
+    #[cfg(windows)]
+    {
+        let (stream, _) = listener.accept().await?;
+        Ok(stream)
+    }
+}
+
+async fn connect_ipc() -> Result<IpcStream> {
+    #[cfg(unix)]
+    {
+        Ok(tokio::net::UnixStream::connect(ipc_path()).await?)
+    }
+    #[cfg(windows)]
+    {
+        let addr = tokio::fs::read_to_string(ipc_path()).await?;
+        Ok(tokio::net::TcpStream::connect(addr.trim()).await?)
+    }
+}
+
+async fn send_ipc(request: IpcRequest) -> Result<IpcResponse> {
+    let mut stream = connect_ipc().await?;
+    stream
+        .write_all(format!("{}\n", serde_json::to_string(&request)?).as_bytes())
+        .await?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
+    Ok(serde_json::from_str(&line)?)
+}
+
+async fn handle_ipc(stream: IpcStream, apps: Vec<promon_core::ResolvedAppSpec>) -> Result<()> {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await?;
+    let request: IpcRequest = serde_json::from_str(&line)?;
+    let response = match request {
+        IpcRequest::Ping => IpcResponse {
+            ok: true,
+            payload: serde_json::json!({ "pong": true }),
+            error: None,
+        },
+        IpcRequest::List => match list_apps().await {
+            Ok(processes) => IpcResponse {
+                ok: true,
+                payload: serde_json::json!({ "processes": processes }),
+                error: None,
+            },
+            Err(error) => error_response(error.to_string()),
+        },
+        IpcRequest::Stop { name } => {
+            if name == "all" {
+                match stop_all().await {
+                    Ok(processes) => IpcResponse {
+                        ok: true,
+                        payload: serde_json::json!({ "stopped": processes }),
+                        error: None,
+                    },
+                    Err(error) => error_response(error.to_string()),
+                }
+            } else {
+                match stop_app(&name).await {
+                    Ok(process) => IpcResponse {
+                        ok: true,
+                        payload: serde_json::json!({ "stopped": process }),
+                        error: None,
+                    },
+                    Err(error) => error_response(error.to_string()),
+                }
+            }
+        }
+        IpcRequest::Start { config } => match load_config(&config).await {
+            Ok(loaded) => {
+                let mut started = Vec::new();
+                let mut error = None;
+                for app in loaded {
+                    match start_app(&app).await {
+                        Ok(process) => started.push(process),
+                        Err(err) => {
+                            error = Some(err.to_string());
+                            break;
+                        }
+                    }
+                }
+                if let Some(error) = error {
+                    error_response(error)
+                } else {
+                    IpcResponse {
+                        ok: true,
+                        payload: serde_json::json!({ "started": started }),
+                        error: None,
+                    }
+                }
+            }
+            Err(error) => error_response(error.to_string()),
+        },
+        IpcRequest::Restart { config } => match load_config(&config).await {
+            Ok(loaded) => {
+                let mut restarted = Vec::new();
+                let mut error = None;
+                for app in loaded {
+                    match restart_app(&app).await {
+                        Ok(process) => restarted.push(process),
+                        Err(err) => {
+                            error = Some(err.to_string());
+                            break;
+                        }
+                    }
+                }
+                if let Some(error) = error {
+                    error_response(error)
+                } else {
+                    IpcResponse {
+                        ok: true,
+                        payload: serde_json::json!({ "restarted": restarted }),
+                        error: None,
+                    }
+                }
+            }
+            Err(error) => error_response(error.to_string()),
+        },
+    };
+
+    let mut stream = reader.into_inner();
+    stream
+        .write_all(format!("{}\n", serde_json::to_string(&response)?).as_bytes())
+        .await?;
+    let _ = apps;
+    Ok(())
+}
+
+fn error_response(error: String) -> IpcResponse {
+    IpcResponse {
+        ok: false,
+        payload: serde_json::Value::Null,
+        error: Some(error),
+    }
+}
+
+fn ipc_path() -> PathBuf {
+    #[cfg(unix)]
+    {
+        promon_home().join("daemon").join("promon.sock")
+    }
+    #[cfg(windows)]
+    {
+        promon_home().join("daemon").join("promon.addr")
+    }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 async fn service_install(config: Option<PathBuf>, json: bool) -> Result<()> {
     let config = resolve_config(config)?;
     let exe = std::env::current_exe()?;
@@ -508,11 +807,32 @@ async fn service_install(config: Option<PathBuf>, json: bool) -> Result<()> {
         print_json(serde_json::json!({ "installed": path, "config": config }))?;
     } else {
         println!("Installed service definition at {}", path.display());
-        println!(
-            "It runs: {} start --wait {}",
-            exe.display(),
-            config.display()
-        );
+        println!("It runs: {} daemon run {}", exe.display(), config.display());
+    }
+    Ok(())
+}
+
+async fn service_start(json: bool) -> Result<()> {
+    let path = service_file_path()?;
+    if !path.exists() {
+        anyhow::bail!("service is not installed at {}", path.display());
+    }
+    let result = service_start_command(&path).await?;
+    if json {
+        print_json(serde_json::json!({ "started": result }))?;
+    } else {
+        println!("{result}");
+    }
+    Ok(())
+}
+
+async fn service_stop(json: bool) -> Result<()> {
+    let path = service_file_path()?;
+    let result = service_stop_command(&path).await?;
+    if json {
+        print_json(serde_json::json!({ "stopped": result }))?;
+    } else {
+        println!("{result}");
     }
     Ok(())
 }
@@ -586,8 +906,8 @@ fn service_file_content(exe: &std::path::Path, config: &std::path::Path) -> Resu
   <key>ProgramArguments</key>
   <array>
     <string>{}</string>
-    <string>start</string>
-    <string>--wait</string>
+    <string>daemon</string>
+    <string>run</string>
     <string>{}</string>
   </array>
   <key>RunAtLoad</key><true/>
@@ -603,7 +923,7 @@ fn service_file_content(exe: &std::path::Path, config: &std::path::Path) -> Resu
     #[cfg(target_os = "linux")]
     {
         return Ok(format!(
-            "[Unit]\nDescription=Promon process supervisor\n\n[Service]\nExecStart={} start --wait {}\nRestart=always\n\n[Install]\nWantedBy=default.target\n",
+            "[Unit]\nDescription=Promon process supervisor\n\n[Service]\nExecStart={} daemon run {}\nRestart=always\n\n[Install]\nWantedBy=default.target\n",
             exe.display(),
             config.display()
         ));
@@ -612,11 +932,111 @@ fn service_file_content(exe: &std::path::Path, config: &std::path::Path) -> Resu
     #[cfg(windows)]
     {
         return Ok(format!(
-            "Promon service command:\n{} start --wait {}\nUse a Windows service wrapper or the future native daemon service backend to register this command.\n",
+            "Promon service command:\n{} daemon run {}\nUse a Windows service wrapper or the future native daemon service backend to register this command.\n",
             exe.display(),
             config.display()
         ));
     }
+}
+
+async fn service_start_command(path: &std::path::Path) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let uid = command_output("id", &["-u"]).await?;
+        let target = format!("gui/{}", uid.trim());
+        let status = tokio::process::Command::new("launchctl")
+            .args(["bootstrap", &target, &path.display().to_string()])
+            .status()
+            .await?;
+        if !status.success() {
+            let _ = tokio::process::Command::new("launchctl")
+                .args([
+                    "kickstart",
+                    "-k",
+                    &format!("{target}/top.backrunner.promon"),
+                ])
+                .status()
+                .await?;
+        }
+        Ok(format!("launchd service started via {}", path.display()))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        run_status("systemctl", &["--user", "daemon-reload"]).await?;
+        run_status(
+            "systemctl",
+            &["--user", "enable", "--now", "promon.service"],
+        )
+        .await?;
+        return Ok("systemd user service enabled and started".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = path;
+        return Ok(
+            "Windows native service registration is not available in this MVP backend".to_string(),
+        );
+    }
+}
+
+async fn service_stop_command(path: &std::path::Path) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let uid = command_output("id", &["-u"]).await?;
+        let target = format!("gui/{}", uid.trim());
+        let status = tokio::process::Command::new("launchctl")
+            .args(["bootout", &target, &path.display().to_string()])
+            .status()
+            .await?;
+        if !status.success() {
+            anyhow::bail!("launchctl bootout failed for {}", path.display());
+        }
+        Ok(format!("launchd service stopped via {}", path.display()))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = path;
+        run_status(
+            "systemctl",
+            &["--user", "disable", "--now", "promon.service"],
+        )
+        .await?;
+        return Ok("systemd user service stopped and disabled".to_string());
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = path;
+        return Ok(
+            "Windows native service registration is not available in this MVP backend".to_string(),
+        );
+    }
+}
+
+async fn command_output(program: &str, args: &[&str]) -> Result<String> {
+    let output = tokio::process::Command::new(program)
+        .args(args)
+        .output()
+        .await?;
+    if !output.status.success() {
+        anyhow::bail!("{program} failed with status {}", output.status);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(target_os = "linux")]
+async fn run_status(program: &str, args: &[&str]) -> Result<()> {
+    let status = tokio::process::Command::new(program)
+        .args(args)
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("{program} failed with status {status}");
+    }
+    Ok(())
 }
 
 async fn watch(target: Option<PathBuf>, interval_ms: u64, json: bool) -> Result<()> {

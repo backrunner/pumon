@@ -27,6 +27,6 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 sysinfo = "0.37"
 thiserror = "2.0"
-tokio = { version = "1.48", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1.48", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 toml = "0.9"
 which = "8.0"

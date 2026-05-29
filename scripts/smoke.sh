@@ -39,7 +39,10 @@ HOME="$tmp_home" "$PROMON_BIN" service uninstall
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon start examples/basic/ecosystem.config.json
 sleep 1
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon status
+PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon ping
+PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon list
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon stop
+PROMON_HOME="$tmp_home" "$PROMON_BIN" list
 
 set +e
 PROMON_HOME="$tmp_home" "$PROMON_BIN" start --wait fixtures/node-apps/crash/ecosystem.config.json

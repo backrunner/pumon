@@ -3,7 +3,7 @@
 The current service implementation generates a user-level startup definition that runs:
 
 ```text
-promon start --wait <config>
+promon daemon run <config>
 ```
 
 Platform output:
@@ -12,5 +12,4 @@ Platform output:
 - Linux: `~/.config/systemd/user/promon.service`
 - Windows: a command file under `PROMON_HOME/service`
 
-Native daemon service registration remains the next hardening step.
-
+`promon service start` and `promon service stop` call `launchctl` on macOS and `systemctl --user` on Linux. Windows native service registration remains the next hardening step.

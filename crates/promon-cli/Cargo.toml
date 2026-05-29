@@ -18,5 +18,6 @@ promon-logging = { path = "../promon-logging" }
 promon-node-support = { path = "../promon-node-support" }
 promon-platform = { path = "../promon-platform" }
 promon-process = { path = "../promon-process" }
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -1,7 +1,7 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Datelike, Timelike, Utc};
 use promon_core::{ManagedProcess, ProcessStatus, PromonError, PromonResult, ResolvedAppSpec};
 use promon_logging::ensure_log_paths;
 use promon_node_support::resolve_runtime_command;
@@ -117,7 +117,7 @@ pub async fn run_app_foreground(app: &ResolvedAppSpec) -> PromonResult<()> {
         let interval_restart = app
             .cron_restart
             .as_deref()
-            .map(parse_duration_ms)
+            .map(parse_restart_delay)
             .transpose()?;
 
         let status = loop {
@@ -188,6 +188,13 @@ fn parse_memory_limit(value: &str) -> PromonResult<u64> {
     Ok(number.saturating_mul(multiplier))
 }
 
+fn parse_restart_delay(value: &str) -> PromonResult<Duration> {
+    if value.split_whitespace().count() >= 5 {
+        return next_cron_delay(value);
+    }
+    parse_duration_ms(value)
+}
+
 fn parse_duration_ms(value: &str) -> PromonResult<Duration> {
     let trimmed = value.trim();
     let split = trimmed
@@ -209,6 +216,90 @@ fn parse_duration_ms(value: &str) -> PromonResult<Duration> {
         }
     };
     Ok(Duration::from_millis(millis))
+}
+
+fn next_cron_delay(value: &str) -> PromonResult<Duration> {
+    let fields: Vec<_> = value.split_whitespace().collect();
+    if fields.len() != 5 {
+        return Err(PromonError::Config(format!(
+            "cron_restart cron syntax expects 5 fields: {value}"
+        )));
+    }
+
+    let minutes = parse_cron_field(fields[0], 0, 59)?;
+    let hours = parse_cron_field(fields[1], 0, 23)?;
+    let days = parse_cron_field(fields[2], 1, 31)?;
+    let months = parse_cron_field(fields[3], 1, 12)?;
+    let weekdays = parse_cron_field(fields[4], 0, 7)?;
+    let now = chrono::Local::now();
+
+    for offset in 1..=(366 * 24 * 60) {
+        let candidate = now + chrono::Duration::minutes(offset);
+        let weekday = candidate.weekday().num_days_from_sunday();
+        if minutes.contains(&candidate.minute())
+            && hours.contains(&candidate.hour())
+            && days.contains(&candidate.day())
+            && months.contains(&candidate.month())
+            && (weekdays.contains(&weekday) || (weekday == 0 && weekdays.contains(&7)))
+        {
+            let delay = candidate
+                .signed_duration_since(now)
+                .to_std()
+                .map_err(|_| PromonError::Config(format!("invalid cron_restart: {value}")))?;
+            return Ok(delay);
+        }
+    }
+
+    Err(PromonError::Config(format!(
+        "cron_restart has no matching time in the next year: {value}"
+    )))
+}
+
+fn parse_cron_field(value: &str, min: u32, max: u32) -> PromonResult<Vec<u32>> {
+    let mut values = Vec::new();
+    for part in value.split(',') {
+        if part == "*" {
+            values.extend(min..=max);
+            continue;
+        }
+        if let Some(step) = part.strip_prefix("*/") {
+            let step: usize = step
+                .parse()
+                .map_err(|_| PromonError::Config(format!("invalid cron step: {value}")))?;
+            if step == 0 {
+                return Err(PromonError::Config(format!("invalid cron step: {value}")));
+            }
+            values.extend((min..=max).step_by(step));
+            continue;
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            let start: u32 = start
+                .parse()
+                .map_err(|_| PromonError::Config(format!("invalid cron range: {value}")))?;
+            let end: u32 = end
+                .parse()
+                .map_err(|_| PromonError::Config(format!("invalid cron range: {value}")))?;
+            if start < min || end > max || start > end {
+                return Err(PromonError::Config(format!(
+                    "cron range out of bounds: {value}"
+                )));
+            }
+            values.extend(start..=end);
+            continue;
+        }
+        let item: u32 = part
+            .parse()
+            .map_err(|_| PromonError::Config(format!("invalid cron field: {value}")))?;
+        if item < min || item > max {
+            return Err(PromonError::Config(format!(
+                "cron field out of bounds: {value}"
+            )));
+        }
+        values.push(item);
+    }
+    values.sort_unstable();
+    values.dedup();
+    Ok(values)
 }
 
 fn process_memory_bytes(pid: u32) -> u64 {
@@ -300,4 +391,30 @@ pub async fn list_apps() -> PromonResult<Vec<ManagedProcess>> {
         };
     }
     Ok(processes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_memory_units() {
+        assert_eq!(parse_memory_limit("64M").unwrap(), 64 * 1024 * 1024);
+        assert_eq!(parse_memory_limit("1G").unwrap(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn parses_interval_restart() {
+        assert_eq!(parse_restart_delay("30s").unwrap(), Duration::from_secs(30));
+        assert_eq!(parse_restart_delay("5m").unwrap(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn parses_cron_fields() {
+        assert_eq!(
+            parse_cron_field("*/15", 0, 59).unwrap(),
+            vec![0, 15, 30, 45]
+        );
+        assert_eq!(parse_cron_field("1,3-5", 0, 7).unwrap(), vec![1, 3, 4, 5]);
+    }
 }
