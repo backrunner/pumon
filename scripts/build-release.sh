@@ -17,9 +17,13 @@ fi
 cp LICENSE README.md "$dist/$name/"
 
 if [[ "$archive" == "zip" ]]; then
-  (cd "$dist" && zip -r "${name}.zip" "$name")
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$dist" && zip -r "${name}.zip" "$name")
+  else
+    powershell -NoProfile -Command \
+      "Compress-Archive -Path '${dist}/${name}' -DestinationPath '${dist}/${name}.zip' -Force"
+  fi
 else
   (cd "$dist" && tar -czf "${name}.tar.gz" "$name")
 fi
 rm -rf "$dist/$name"
-
