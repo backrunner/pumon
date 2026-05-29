@@ -35,6 +35,7 @@ use tokio::task::JoinSet;
 
 type DesiredApps = Arc<Mutex<Vec<ResolvedAppSpec>>>;
 const IPC_VERSION: u16 = 1;
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const DEFAULT_WATCH_IGNORES: &[&str] = &[
     ".git",
     ".pumon",
@@ -2695,10 +2696,24 @@ fn first_nonempty<'a>(primary: &'a str, fallback: &'a str) -> Option<&'a str> {
 }
 
 async fn command_capture(program: &str, args: &[&str]) -> Result<CommandCapture> {
-    let output = tokio::process::Command::new(program)
-        .args(args)
-        .output()
-        .await?;
+    let output = match tokio::time::timeout(
+        COMMAND_TIMEOUT,
+        tokio::process::Command::new(program).args(args).output(),
+    )
+    .await
+    {
+        Ok(output) => output?,
+        Err(_) => {
+            return Ok(CommandCapture {
+                success: false,
+                stdout: String::new(),
+                stderr: format!(
+                    "{program} timed out after {} seconds",
+                    COMMAND_TIMEOUT.as_secs()
+                ),
+            });
+        }
+    };
     Ok(CommandCapture {
         success: output.status.success(),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -2708,10 +2723,17 @@ async fn command_capture(program: &str, args: &[&str]) -> Result<CommandCapture>
 
 #[cfg(target_os = "linux")]
 async fn run_status(program: &str, args: &[&str]) -> Result<()> {
-    let status = tokio::process::Command::new(program)
-        .args(args)
-        .status()
-        .await?;
+    let status = tokio::time::timeout(
+        COMMAND_TIMEOUT,
+        tokio::process::Command::new(program).args(args).status(),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "{program} timed out after {} seconds",
+            COMMAND_TIMEOUT.as_secs()
+        )
+    })??;
     if !status.success() {
         anyhow::bail!("{program} failed with status {status}");
     }
