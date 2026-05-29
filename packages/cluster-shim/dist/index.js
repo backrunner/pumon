@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 function help() {
-  console.log("usage: pumon-cluster-shim '<json-spec>'");
+  console.log("usage: procwatch-cluster-shim '<json-spec>'");
 }
 
 const raw = process.argv[2];
@@ -24,7 +24,7 @@ let controlServer;
 const controlToken = spec.controlToken || randomBytes(32).toString("hex");
 
 function workerEnv(index) {
-  return { ...(worker.env || {}), ...process.env, PUMON_WORKER_ID: String(index) };
+  return { ...(worker.env || {}), ...process.env, PROCWATCH_WORKER_ID: String(index) };
 }
 
 function delay(ms) {
@@ -207,29 +207,29 @@ if ((worker.interpreter || "node") === "node") {
       env: workerEnv(index),
       stdio: "inherit"
     });
-    child.pumonIndex = index;
-    child.pumonStopping = false;
-    child.pumonExited = false;
+    child.procwatchIndex = index;
+    child.procwatchStopping = false;
+    child.procwatchExited = false;
     children.add(child);
     child.on("exit", () => {
-      child.pumonExited = true;
+      child.procwatchExited = true;
       children.delete(child);
-      if (!shuttingDown && !child.pumonStopping && children.size < targetInstances) start(index);
+      if (!shuttingDown && !child.procwatchStopping && children.size < targetInstances) start(index);
     });
     return child;
   }
 
   function stopChild(child) {
-    child.pumonStopping = true;
+    child.procwatchStopping = true;
     child.kill("SIGTERM");
     setTimeout(() => {
-      if (!child.pumonExited) child.kill("SIGKILL");
+      if (!child.procwatchExited) child.kill("SIGKILL");
     }, 5000).unref();
   }
 
   function waitChildExit(child) {
     return new Promise((resolve) => {
-      if (!child || child.pumonExited) {
+      if (!child || child.procwatchExited) {
         resolve();
         return;
       }
@@ -252,7 +252,7 @@ if ((worker.interpreter || "node") === "node") {
   async function reloadWorkers() {
     const current = [...children];
     for (const child of current) {
-      start(child.pumonIndex);
+      start(child.procwatchIndex);
       await delay(100);
       stopChild(child);
       await waitChildExit(child);

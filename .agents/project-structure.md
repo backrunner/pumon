@@ -1,9 +1,9 @@
-# Pumon Project Structure
+# Procwatch Project Structure
 
 ## Proposed Repository Layout
 
 ```text
-pumon/
+procwatch/
   .agents/
     README.md
     requirements.md
@@ -17,12 +17,12 @@ pumon/
       release.yml
       npm.yml
   crates/
-    pumon-cli/
+    procwatch-cli/
       src/
         main.rs
         commands/
         output/
-    pumon-core/
+    procwatch-core/
       src/
         app.rs
         error.rs
@@ -30,28 +30,28 @@ pumon/
         restart.rs
         spec.rs
         status.rs
-    pumon-config/
+    procwatch-config/
       src/
         detect.rs
         formats/
         lib.rs
         normalize.rs
         validate.rs
-    pumon-daemon/
+    procwatch-daemon/
       src/
         handlers/
         lib.rs
         reconcile.rs
         runtime.rs
         state/
-    pumon-ipc/
+    procwatch-ipc/
       src/
         client.rs
         lib.rs
         protocol.rs
         server.rs
         transport/
-    pumon-process/
+    procwatch-process/
       src/
         child.rs
         cluster.rs
@@ -59,53 +59,53 @@ pumon/
         lib.rs
         supervisor.rs
         termination.rs
-    pumon-node-support/
+    procwatch-node-support/
       src/
         config_loader.rs
         lib.rs
         package_manager.rs
         runtime_resolver.rs
-    pumon-platform/
+    procwatch-platform/
       src/
         lib.rs
         metrics.rs
         paths.rs
         unix.rs
         windows.rs
-    pumon-service/
+    procwatch-service/
       src/
         lib.rs
         linux.rs
         macos.rs
         windows.rs
-    pumon-logging/
+    procwatch-logging/
       src/
         lib.rs
         rotate.rs
         tail.rs
         writer.rs
-    pumon-watch/
+    procwatch-watch/
       src/
         debounce.rs
         filters.rs
         lib.rs
         manager.rs
-    pumon-scheduler/
+    procwatch-scheduler/
       src/
         cron.rs
         lib.rs
         scheduler.rs
-    pumon-tui/
+    procwatch-tui/
       src/
         app.rs
         lib.rs
         screens/
         widgets/
   packages/
-    pumon/
+    procwatch/
       package.json
       bin/
-        pumon.js
+        procwatch.js
       scripts/
         install.js
         resolve-binary.js
@@ -166,10 +166,10 @@ pumon/
 ## Workspace Rules
 
 - Keep Rust crates focused on one responsibility.
-- Put cross-platform abstractions in `pumon-platform`, not scattered through feature code.
+- Put cross-platform abstractions in `procwatch-platform`, not scattered through feature code.
 - Keep daemon command handling separate from the lower-level supervisor.
 - Keep CLI rendering separate from command behavior.
-- Treat `packages/pumon` as a binary installer/wrapper, not the core implementation.
+- Treat `packages/procwatch` as a binary installer/wrapper, not the core implementation.
 - Treat `packages/cluster-shim` as Node cluster runtime glue, not a general Node SDK.
 - Treat `packages/node-support` as bundled Node-side support code for config loading and JS/TS runtime glue.
 
@@ -199,22 +199,22 @@ When a file grows:
 Recommended dependency direction:
 
 ```text
-pumon-cli       -> pumon-core, pumon-config, pumon-ipc
-pumon-tui       -> pumon-core, pumon-ipc
-pumon-daemon    -> all core runtime crates
-pumon-process   -> pumon-core, pumon-platform, pumon-logging, pumon-node-support
-pumon-config    -> pumon-core, pumon-platform, pumon-node-support
-pumon-node-support -> pumon-core, pumon-platform
-pumon-service   -> pumon-core, pumon-platform
-pumon-ipc       -> pumon-core
-pumon-logging   -> pumon-core, pumon-platform
-pumon-watch     -> pumon-core
-pumon-scheduler -> pumon-core
-pumon-platform  -> pumon-core
-pumon-core      -> minimal third-party dependencies
+procwatch-cli       -> procwatch-core, procwatch-config, procwatch-ipc
+procwatch-tui       -> procwatch-core, procwatch-ipc
+procwatch-daemon    -> all core runtime crates
+procwatch-process   -> procwatch-core, procwatch-platform, procwatch-logging, procwatch-node-support
+procwatch-config    -> procwatch-core, procwatch-platform, procwatch-node-support
+procwatch-node-support -> procwatch-core, procwatch-platform
+procwatch-service   -> procwatch-core, procwatch-platform
+procwatch-ipc       -> procwatch-core
+procwatch-logging   -> procwatch-core, procwatch-platform
+procwatch-watch     -> procwatch-core
+procwatch-scheduler -> procwatch-core
+procwatch-platform  -> procwatch-core
+procwatch-core      -> minimal third-party dependencies
 ```
 
-Avoid dependency cycles by keeping shared types in `pumon-core`.
+Avoid dependency cycles by keeping shared types in `procwatch-core`.
 
 ## Recommended Rust Dependencies
 
@@ -263,9 +263,9 @@ Release:
 
 ## NPM Package Layout
 
-`packages/pumon` should provide:
+`packages/procwatch` should provide:
 
-- A `bin` entry named `pumon`.
+- A `bin` entry named `procwatch`.
 - An install script that downloads the correct binary.
 - A runtime fallback that downloads on first run if install scripts were skipped.
 - Channel selection through package dist-tags and environment variables.
@@ -288,7 +288,7 @@ The wrapper should:
 - Worker lifecycle reporting.
 - Graceful reload behavior.
 
-The shim should not become a public API unless a future product decision explicitly expands Pumon beyond CLI use.
+The shim should not become a public API unless a future product decision explicitly expands Procwatch beyond CLI use.
 
 ## Node Support Package Layout
 
@@ -298,7 +298,7 @@ The shim should not become a public API unless a future product decision explici
 - `package-json`: Reads package metadata and package scripts.
 - Shared protocol helpers for structured JSON output and errors.
 
-This package is internal runtime support. It should be versioned and bundled with Pumon releases rather than installed into user projects.
+This package is internal runtime support. It should be versioned and bundled with Procwatch releases rather than installed into user projects.
 
 ## Documentation Layout
 

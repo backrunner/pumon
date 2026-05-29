@@ -1,5 +1,5 @@
 {
-  "name": "pumon-typescript-example",
+  "name": "procwatch-typescript-example",
   "type": "module",
   "scripts": {
     "start": "node dist/server.js",

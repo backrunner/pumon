@@ -29,12 +29,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: cargo test --workspace
-      - run: cargo build --release -p pumon-cli --target ${{ matrix.target }}
+      - run: cargo build --release -p procwatch-cli --target ${{ matrix.target }}
       - shell: bash
         run: scripts/build-release.sh "${GITHUB_REF_NAME#v}" "${{ matrix.target }}" "${{ matrix.archive }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: pumon-${{ matrix.target }}
+          name: procwatch-${{ matrix.target }}
           path: dist/*
 
   publish:
@@ -50,7 +50,7 @@ jobs:
           mkdir -p dist
           find artifacts -type f -maxdepth 3 -exec cp {} dist/ \;
           cd dist
-          sha256sum pumon-v*.tar.gz pumon-v*.zip > "pumon-${GITHUB_REF_NAME}-checksums.txt"
+          sha256sum procwatch-v*.tar.gz procwatch-v*.zip > "procwatch-${GITHUB_REF_NAME}-checksums.txt"
       - uses: softprops/action-gh-release@v2
         with:
           prerelease: ${{ contains(github.ref_name, '-alpha.') || contains(github.ref_name, '-beta.') }}

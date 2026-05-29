@@ -739,19 +739,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "pumon-cli"
+name = "procwatch-cli"
 version = "0.1.0-beta.1"
 dependencies = [
  "anyhow",
  "clap",
  "crossterm",
  "globset",
- "pumon-config",
- "pumon-core",
- "pumon-logging",
- "pumon-node-support",
- "pumon-platform",
- "pumon-process",
+ "procwatch-config",
+ "procwatch-core",
+ "procwatch-logging",
+ "procwatch-node-support",
+ "procwatch-platform",
+ "procwatch-process",
  "ratatui",
  "serde",
  "serde_json",
@@ -759,11 +759,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "pumon-config"
+name = "procwatch-config"
 version = "0.1.0-beta.1"
 dependencies = [
- "pumon-core",
- "pumon-node-support",
+ "procwatch-core",
+ "procwatch-node-support",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -772,7 +772,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pumon-core"
+name = "procwatch-core"
 version = "0.1.0-beta.1"
 dependencies = [
  "chrono",
@@ -782,19 +782,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "pumon-logging"
+name = "procwatch-logging"
 version = "0.1.0-beta.1"
 dependencies = [
- "pumon-core",
+ "procwatch-core",
  "tokio",
 ]
 
 [[package]]
-name = "pumon-node-support"
+name = "procwatch-node-support"
 version = "0.1.0-beta.1"
 dependencies = [
- "pumon-core",
- "pumon-platform",
+ "procwatch-core",
+ "procwatch-platform",
  "serde",
  "serde_json",
  "thiserror",
@@ -803,7 +803,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pumon-platform"
+name = "procwatch-platform"
 version = "0.1.0-beta.1"
 dependencies = [
  "directories",
@@ -813,15 +813,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "pumon-process"
+name = "procwatch-process"
 version = "0.1.0-beta.1"
 dependencies = [
  "chrono",
  "fs2",
- "pumon-core",
- "pumon-logging",
- "pumon-node-support",
- "pumon-platform",
+ "procwatch-core",
+ "procwatch-logging",
+ "procwatch-node-support",
+ "procwatch-platform",
  "rusqlite",
  "serde",
  "serde_json",

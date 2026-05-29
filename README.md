@@ -1,26 +1,26 @@
-# Pumon
+# Procwatch
 
-Pumon is a Rust-first Node.js process manager for JavaScript and TypeScript projects.
+Procwatch is a Rust-first Node.js process manager for JavaScript and TypeScript projects.
 
 This repository currently contains the first MVP implementation:
 
-- `pumon init`
-- `pumon validate`
-- `pumon doctor`
-- `pumon prune`
-- `pumon start`
-- `pumon start --wait`
-- `pumon stop`
-- `pumon restart`
-- `pumon reload`
-- `pumon scale`
-- `pumon status`
-- `pumon list`
-- `pumon logs`
-- `pumon watch`
-- `pumon daemon`
-- `pumon service`
-- `pumon tui`
+- `procwatch init`
+- `procwatch validate`
+- `procwatch doctor`
+- `procwatch prune`
+- `procwatch start`
+- `procwatch start --wait`
+- `procwatch stop`
+- `procwatch restart`
+- `procwatch reload`
+- `procwatch scale`
+- `procwatch status`
+- `procwatch list`
+- `procwatch logs`
+- `procwatch watch`
+- `procwatch daemon`
+- `procwatch service`
+- `procwatch tui`
 
 Current implemented surface:
 

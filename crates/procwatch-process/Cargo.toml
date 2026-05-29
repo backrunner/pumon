@@ -1,0 +1,20 @@
+[package]
+name = "procwatch-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+procwatch-core = { path = "../procwatch-core" }
+procwatch-logging = { path = "../procwatch-logging" }
+procwatch-node-support = { path = "../procwatch-node-support" }
+procwatch-platform = { path = "../procwatch-platform" }
+chrono.workspace = true
+fs2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+rusqlite.workspace = true

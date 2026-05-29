@@ -1,7 +1,7 @@
 import http from "node:http";
 
 const server = http.createServer((_, response) => {
-  response.end(process.env.PUMON_WORKER_ID || "0");
+  response.end(process.env.PROCWATCH_WORKER_ID || "0");
 });
 
 server.listen(0, "127.0.0.1");

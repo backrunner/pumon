@@ -1,12 +1,12 @@
 [workspace]
 members = [
-  "crates/pumon-cli",
-  "crates/pumon-core",
-  "crates/pumon-config",
-  "crates/pumon-node-support",
-  "crates/pumon-process",
-  "crates/pumon-logging",
-  "crates/pumon-platform",
+  "crates/procwatch-cli",
+  "crates/procwatch-core",
+  "crates/procwatch-config",
+  "crates/procwatch-node-support",
+  "crates/procwatch-process",
+  "crates/procwatch-logging",
+  "crates/procwatch-platform",
 ]
 resolver = "2"
 

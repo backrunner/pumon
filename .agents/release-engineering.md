@@ -1,11 +1,11 @@
-# Pumon Release Engineering
+# Procwatch Release Engineering
 
 ## Release Goals
 
-Pumon must be easy to install and run:
+Procwatch must be easy to install and run:
 
 - Direct binary downloads from GitHub Releases.
-- `npx pumon` execution through npm.
+- `npx procwatch` execution through npm.
 - Separate stable, beta, and alpha channels.
 - Repeatable release workflows.
 - Clear artifact naming and checksum verification.
@@ -40,7 +40,7 @@ Purpose:
 
 NPM:
 
-- Package: `pumon`
+- Package: `procwatch`
 - Dist tag: `latest`
 
 GitHub:
@@ -55,7 +55,7 @@ Purpose:
 
 NPM:
 
-- Package: `pumon`
+- Package: `procwatch`
 - Dist tag: `beta`
 
 GitHub:
@@ -70,7 +70,7 @@ Purpose:
 
 NPM:
 
-- Package: `pumon`
+- Package: `procwatch`
 - Dist tag: `alpha`
 
 GitHub:
@@ -82,17 +82,17 @@ GitHub:
 Recommended artifact names:
 
 ```text
-pumon-v1.2.3-x86_64-unknown-linux-gnu.tar.gz
-pumon-v1.2.3-aarch64-unknown-linux-gnu.tar.gz
-pumon-v1.2.3-x86_64-apple-darwin.tar.gz
-pumon-v1.2.3-aarch64-apple-darwin.tar.gz
-pumon-v1.2.3-x86_64-pc-windows-msvc.zip
-pumon-v1.2.3-checksums.txt
+procwatch-v1.2.3-x86_64-unknown-linux-gnu.tar.gz
+procwatch-v1.2.3-aarch64-unknown-linux-gnu.tar.gz
+procwatch-v1.2.3-x86_64-apple-darwin.tar.gz
+procwatch-v1.2.3-aarch64-apple-darwin.tar.gz
+procwatch-v1.2.3-x86_64-pc-windows-msvc.zip
+procwatch-v1.2.3-checksums.txt
 ```
 
 Each archive should contain:
 
-- `pumon` or `pumon.exe`.
+- `procwatch` or `procwatch.exe`.
 - `LICENSE`.
 - `README.md`.
 - Optional shell completions.
@@ -106,7 +106,7 @@ Run on pull request and push:
 - `cargo fmt --check`.
 - `cargo clippy --workspace --all-targets -- -D warnings`.
 - `cargo test --workspace`.
-- Node package lint/build for `packages/pumon` and `packages/cluster-shim`.
+- Node package lint/build for `packages/procwatch` and `packages/cluster-shim`.
 - Node support package lint/build for JavaScript/TypeScript ecosystem config loading.
 - Basic npm wrapper tests.
 
@@ -131,9 +131,9 @@ Optional:
 
 ## NPM Wrapper Behavior
 
-`npx pumon` should:
+`npx procwatch` should:
 
-1. Execute `packages/pumon/bin/pumon.js`.
+1. Execute `packages/procwatch/bin/procwatch.js`.
 2. Detect platform and architecture.
 3. Determine desired channel.
 4. Find a local cached binary.
@@ -143,10 +143,10 @@ Optional:
 
 Channel resolution:
 
-- `npx pumon`: stable by default.
-- `npx pumon@beta`: beta through npm dist-tag.
-- `npx pumon@alpha`: alpha through npm dist-tag.
-- `PUMON_CHANNEL=beta npx pumon`: explicit environment override, useful for testing.
+- `npx procwatch`: stable by default.
+- `npx procwatch@beta`: beta through npm dist-tag.
+- `npx procwatch@alpha`: alpha through npm dist-tag.
+- `PROCWATCH_CHANNEL=beta npx procwatch`: explicit environment override, useful for testing.
 
 The wrapper should support install scripts but must also work when npm lifecycle scripts are disabled.
 
@@ -154,14 +154,14 @@ The wrapper should support install scripts but must also work when npm lifecycle
 
 Recommended cache location:
 
-- macOS: `~/Library/Caches/pumon/bin/`
-- Linux: `~/.cache/pumon/bin/`
-- Windows: `%LOCALAPPDATA%\pumon\Cache\bin\`
+- macOS: `~/Library/Caches/procwatch/bin/`
+- Linux: `~/.cache/procwatch/bin/`
+- Windows: `%LOCALAPPDATA%\procwatch\Cache\bin\`
 
 Cache key:
 
 ```text
-<version>/<target-triple>/pumon
+<version>/<target-triple>/procwatch
 ```
 
 The wrapper must not silently run a binary whose checksum does not match the release checksums.
@@ -176,17 +176,17 @@ Beta/alpha:
 
 - Resolve exact npm package version to GitHub tag `v<version>`.
 
-Avoid "latest release" lookup at runtime when npm already pins the package version. This makes `npx pumon@1.2.3` deterministic.
+Avoid "latest release" lookup at runtime when npm already pins the package version. This makes `npx procwatch@1.2.3` deterministic.
 
 ## Package Versions
 
-The npm package version should match the Pumon binary version.
+The npm package version should match the Procwatch binary version.
 
 Examples:
 
-- `pumon@1.2.3` downloads `v1.2.3`.
-- `pumon@1.2.3-beta.1` downloads `v1.2.3-beta.1`.
-- `pumon@1.2.3-alpha.1` downloads `v1.2.3-alpha.1`.
+- `procwatch@1.2.3` downloads `v1.2.3`.
+- `procwatch@1.2.3-beta.1` downloads `v1.2.3-beta.1`.
+- `procwatch@1.2.3-alpha.1` downloads `v1.2.3-alpha.1`.
 
 ## Security Considerations
 
@@ -209,8 +209,8 @@ Recommended later:
 Before publishing stable:
 
 - CI is green on all supported platforms.
-- `pumon doctor` passes on fresh machines.
-- `npx pumon --version` works on macOS, Linux, and Windows.
+- `procwatch doctor` passes on fresh machines.
+- `npx procwatch --version` works on macOS, Linux, and Windows.
 - Basic start/stop/logs flow works on each OS for CommonJS, ESM, TypeScript loader, TypeScript prebuilt output, and package manager script fixtures.
 - Service install/uninstall is manually verified.
 - Checksums are present and validated by npm wrapper.

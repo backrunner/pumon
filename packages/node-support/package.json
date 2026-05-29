@@ -1,5 +1,5 @@
 {
-  "name": "@pumon/node-support",
+  "name": "@procwatch/node-support",
   "version": "0.1.0-beta.1",
   "private": true,
   "type": "module",

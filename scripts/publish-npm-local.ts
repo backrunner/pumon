@@ -24,16 +24,16 @@ type PackageJson = {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
-const packageRoot = path.join(repoRoot, "packages", "pumon");
+const packageRoot = path.join(repoRoot, "packages", "procwatch");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as PackageJson;
 const options = parseArgs(process.argv.slice(2));
 
 const expectedAssets = [
-  `pumon-v${packageJson.version}-aarch64-apple-darwin.tar.gz`,
-  `pumon-v${packageJson.version}-x86_64-unknown-linux-gnu.tar.gz`,
-  `pumon-v${packageJson.version}-x86_64-pc-windows-msvc.zip`,
-  `pumon-v${packageJson.version}-checksums.txt`
+  `procwatch-v${packageJson.version}-aarch64-apple-darwin.tar.gz`,
+  `procwatch-v${packageJson.version}-x86_64-unknown-linux-gnu.tar.gz`,
+  `procwatch-v${packageJson.version}-x86_64-pc-windows-msvc.zip`,
+  `procwatch-v${packageJson.version}-checksums.txt`
 ];
 
 console.log(`Preparing ${packageJson.name}@${packageJson.version} for npm tag "${options.tag}".`);
@@ -47,7 +47,7 @@ if (!options.allowDirty) {
 }
 
 if (!packageJson.repository?.url?.includes("github.com/backrunner/pumon")) {
-  fail("packages/pumon/package.json repository.url must point to github.com/backrunner/pumon.");
+  fail("packages/procwatch/package.json repository.url must point to github.com/backrunner/pumon.");
 }
 
 if (!options.skipReleaseCheck) {
@@ -57,7 +57,7 @@ if (!options.skipReleaseCheck) {
 command("npm", ["--prefix", "packages/node-support", "install"], { cwd: repoRoot });
 command("npm", ["--prefix", "packages/node-support", "run", "build"], { cwd: repoRoot });
 command("npm", ["--prefix", "packages/cluster-shim", "test"], { cwd: repoRoot });
-command("cargo", ["build", "-p", "pumon-cli"], { cwd: repoRoot });
+command("cargo", ["build", "-p", "procwatch-cli"], { cwd: repoRoot });
 command("npm", ["test"], { cwd: packageRoot });
 command("npm", ["pack", "--dry-run"], { cwd: packageRoot });
 

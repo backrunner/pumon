@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const tempDir = mkdtempSync(path.join(os.tmpdir(), "pumon-cluster-shim."));
+const tempDir = mkdtempSync(path.join(os.tmpdir(), "procwatch-cluster-shim."));
 const controlPath = path.join(tempDir, "cluster.addr");
 const shim = path.join(root, "dist", "index.js");
 const worker = path.join(root, "test", "worker.mjs");

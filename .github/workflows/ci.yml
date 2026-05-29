@@ -19,8 +19,8 @@ jobs:
       - run: npm --prefix packages/node-support install
       - run: npm --prefix packages/node-support run build
       - run: npm --prefix packages/cluster-shim test
-      - run: cargo build -p pumon-cli
-      - run: npm --prefix packages/pumon test
+      - run: cargo build -p procwatch-cli
+      - run: npm --prefix packages/procwatch test
       - run: npm pack --dry-run
-        working-directory: packages/pumon
+        working-directory: packages/procwatch
       - run: scripts/smoke.sh

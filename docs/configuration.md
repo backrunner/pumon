@@ -1,6 +1,6 @@
 # Configuration
 
-Pumon supports:
+Procwatch supports:
 
 - `ecosystem.config.js`
 - `ecosystem.config.cjs`
@@ -17,4 +17,4 @@ Core fields: `name`, `script`, `command`, `cwd`, `args`, `node_args`, `interpret
 
 `watch` accepts either a boolean or an object. Object form supports `enabled`, `paths`, `include`, `ignore`, `debounce_ms`, and `reload`. `ignore_watch` is also accepted as a top-level PM2-style alias and is merged into `watch.ignore`.
 
-`log.max_size_bytes` enables log rotation for stdout and stderr; `log.retain` controls how many rotated files are kept. Runtime rotation is active when Pumon remains attached as supervisor, such as `daemon`, `watch`, or `start --wait`. Direct detached `start` still performs startup-time rotation. `log.merge: true` writes stderr to the stdout log path.
+`log.max_size_bytes` enables log rotation for stdout and stderr; `log.retain` controls how many rotated files are kept. Runtime rotation is active when Procwatch remains attached as supervisor, such as `daemon`, `watch`, or `start --wait`. Direct detached `start` still performs startup-time rotation. `log.merge: true` writes stderr to the stdout log path.

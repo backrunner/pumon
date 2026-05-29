@@ -1,8 +1,8 @@
-# Pumon Module Design
+# Procwatch Module Design
 
 ## Architecture Overview
 
-Pumon has four major runtime surfaces:
+Procwatch has four major runtime surfaces:
 
 - CLI: Parses user commands, renders output, and sends requests to the daemon.
 - Daemon: Owns process supervision, desired state reconciliation, scheduling, log handling, and watch mode.
@@ -11,9 +11,9 @@ Pumon has four major runtime surfaces:
 
 ```mermaid
 flowchart LR
-  CLI["pumon CLI"] --> IPC["Local IPC"]
-  TUI["pumon tui"] --> IPC
-  IPC --> Daemon["pumon daemon"]
+  CLI["procwatch CLI"] --> IPC["Local IPC"]
+  TUI["procwatch tui"] --> IPC
+  IPC --> Daemon["procwatch daemon"]
   Daemon --> State["State Store"]
   Daemon --> Logs["Log Manager"]
   Daemon --> Watch["Watch Manager"]
@@ -28,7 +28,7 @@ flowchart LR
 
 ## Crate Responsibilities
 
-### `pumon-core`
+### `procwatch-core`
 
 Shared domain types:
 
@@ -42,7 +42,7 @@ Shared domain types:
 
 This crate should avoid OS APIs and async runtime coupling where possible.
 
-### `pumon-config`
+### `procwatch-config`
 
 Configuration parsing and validation:
 
@@ -54,9 +54,9 @@ Configuration parsing and validation:
 - Resolve `instances = "max"`.
 - Parse memory units, cron expressions, watch specs, and log specs.
 
-Output should be a validated `ResolvedAppSpec` from `pumon-core`.
+Output should be a validated `ResolvedAppSpec` from `procwatch-core`.
 
-### `pumon-process`
+### `procwatch-process`
 
 Process supervision:
 
@@ -71,7 +71,7 @@ Process supervision:
 
 This crate should expose a supervisor API that the daemon can drive.
 
-### `pumon-node-support`
+### `procwatch-node-support`
 
 Node-specific support that should stay outside generic process supervision:
 
@@ -83,7 +83,7 @@ Node-specific support that should stay outside generic process supervision:
 
 This may be implemented as a Rust crate plus small bundled JavaScript files under `packages/node-support`.
 
-### `pumon-daemon`
+### `procwatch-daemon`
 
 Daemon orchestration:
 
@@ -97,7 +97,7 @@ Daemon orchestration:
 
 The daemon should be the only component that mutates runtime process state.
 
-### `pumon-ipc`
+### `procwatch-ipc`
 
 Local IPC:
 
@@ -110,7 +110,7 @@ Local IPC:
 
 The schema should be stable enough to support minor-version CLI/daemon skew.
 
-### `pumon-service`
+### `procwatch-service`
 
 System service integration:
 
@@ -119,9 +119,9 @@ System service integration:
 - Windows Service install/uninstall/start/stop/status.
 - Permission diagnostics.
 
-This crate should not supervise apps directly. It only manages Pumon daemon installation.
+This crate should not supervise apps directly. It only manages Procwatch daemon installation.
 
-### `pumon-platform`
+### `procwatch-platform`
 
 Platform abstractions:
 
@@ -132,7 +132,7 @@ Platform abstractions:
 - Lock files.
 - User and permission checks.
 
-### `pumon-logging`
+### `procwatch-logging`
 
 Log handling:
 
@@ -142,7 +142,7 @@ Log handling:
 - Enforce retention.
 - Render log events for CLI/TUI.
 
-### `pumon-watch`
+### `procwatch-watch`
 
 Watch mode:
 
@@ -152,7 +152,7 @@ Watch mode:
 - Event normalization.
 - Restart/reload trigger dispatch.
 
-### `pumon-scheduler`
+### `procwatch-scheduler`
 
 Scheduled restart support:
 
@@ -161,7 +161,7 @@ Scheduled restart support:
 - Next-run calculation.
 - Trigger delivery to daemon.
 
-### `pumon-tui`
+### `procwatch-tui`
 
 Terminal UI:
 
@@ -173,7 +173,7 @@ Terminal UI:
 
 Recommended library: `ratatui` with `crossterm`.
 
-### `pumon-cli`
+### `procwatch-cli`
 
 Command-line entry point:
 
@@ -189,7 +189,7 @@ Recommended library: `clap`.
 
 ## JavaScript and TypeScript Runtime Resolution
 
-Pumon must convert each app spec into a concrete command plan before spawning.
+Procwatch must convert each app spec into a concrete command plan before spawning.
 
 Supported command plans:
 
@@ -206,26 +206,26 @@ Resolution order:
 3. Package manager from `package.json`.
 4. System `PATH`.
 
-Pumon should validate the plan before handing it to the supervisor. It should report missing executables, missing package scripts, unsupported extensions, or missing TypeScript loaders before attempting a long-running daemon start where possible.
+Procwatch should validate the plan before handing it to the supervisor. It should report missing executables, missing package scripts, unsupported extensions, or missing TypeScript loaders before attempting a long-running daemon start where possible.
 
 ### Fork Mode
 
-In fork mode, Pumon directly starts:
+In fork mode, Procwatch directly starts:
 
 ```text
 node <node_args> <script> <args>
 ```
 
-Pumon captures stdout/stderr and supervises the child process.
+Procwatch captures stdout/stderr and supervises the child process.
 
-For TypeScript entrypoints, Pumon starts the resolved command plan rather than assuming `node script.ts` will work.
+For TypeScript entrypoints, Procwatch starts the resolved command plan rather than assuming `node script.ts` will work.
 
 ### Cluster Mode
 
 Cluster mode should use a Node-side shim:
 
 ```text
-node <node_args> pumon-cluster-shim.js --spec <encoded spec>
+node <node_args> procwatch-cluster-shim.js --spec <encoded spec>
 ```
 
 The shim:
@@ -234,13 +234,13 @@ The shim:
 - Forks N workers.
 - Applies worker environment.
 - Applies the same JavaScript/TypeScript command plan rules used by fork mode.
-- Listens for Pumon control messages.
+- Listens for Procwatch control messages.
 - Performs graceful worker replacement.
-- Reports worker lifecycle events back to Pumon.
+- Reports worker lifecycle events back to Procwatch.
 
-Pumon supervises the cluster primary process and treats workers as sub-processes with reported metadata.
+Procwatch supervises the cluster primary process and treats workers as sub-processes with reported metadata.
 
-IPC between Pumon and the cluster shim can start with stdio JSON lines and later move to a local pipe if needed.
+IPC between Procwatch and the cluster shim can start with stdio JSON lines and later move to a local pipe if needed.
 
 ## Ecosystem Config Loader
 
@@ -288,7 +288,7 @@ Policy fields:
 
 Recommended initial durable model:
 
-- SQLite database in Pumon home.
+- SQLite database in Procwatch home.
 - Migrations embedded in the binary.
 - JSON payload columns allowed for config snapshots, but core state should be queryable.
 
@@ -342,32 +342,32 @@ Use a versioned envelope:
 
 Default to user-level systemd:
 
-- Unit path: `~/.config/systemd/user/pumon.service`.
-- ExecStart: absolute path to Pumon binary with daemon foreground mode.
-- Enable with `systemctl --user enable pumon`.
+- Unit path: `~/.config/systemd/user/procwatch.service`.
+- ExecStart: absolute path to Procwatch binary with daemon foreground mode.
+- Enable with `systemctl --user enable procwatch`.
 
 System-level install can be added through explicit flag:
 
-- `/etc/systemd/system/pumon.service`.
+- `/etc/systemd/system/procwatch.service`.
 
 ### macOS
 
 Default to launchd user agent:
 
-- Plist path: `~/Library/LaunchAgents/dev.pumon.daemon.plist`.
-- ProgramArguments: Pumon binary with daemon foreground mode.
+- Plist path: `~/Library/LaunchAgents/dev.procwatch.daemon.plist`.
+- ProgramArguments: Procwatch binary with daemon foreground mode.
 - Load with `launchctl bootstrap gui/<uid> ...`.
 
 System-level install can target:
 
-- `/Library/LaunchDaemons/dev.pumon.daemon.plist`.
+- `/Library/LaunchDaemons/dev.procwatch.daemon.plist`.
 
 ### Windows
 
 Use Windows Service APIs:
 
-- Service name: `Pumon`.
-- Binary path: Pumon executable with daemon foreground mode.
+- Service name: `Procwatch`.
+- Binary path: Procwatch executable with daemon foreground mode.
 - Support start, stop, status, and uninstall.
 
 ## Logging Design
@@ -375,7 +375,7 @@ Use Windows Service APIs:
 Default layout:
 
 ```text
-~/.pumon/
+~/.procwatch/
   logs/
     <app-name>/
       out.log
