@@ -1,8 +1,8 @@
 /target/
 /node_modules/
-/.promon/
+/.pumon/
 /.DS_Store
 /packages/*/node_modules/
 /packages/*/dist/*.map
-/packages/promon/vendor/
+/packages/pumon/vendor/
 *.log
