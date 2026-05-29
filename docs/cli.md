@@ -17,3 +17,5 @@ Implemented MVP commands:
 - `promon tui`
 
 `promon daemon start` launches `promon daemon run <config>`, keeps desired apps reconciled, and exposes local IPC. On Unix platforms IPC uses a Unix socket under `PROMON_HOME/daemon`; on Windows it uses a localhost TCP listener address file.
+
+When the daemon is reachable, normal management commands such as `start`, `stop`, `restart`, `scale`, and `list` route through daemon IPC and update daemon desired state. If no daemon is reachable, they fall back to direct local process management.

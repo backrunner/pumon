@@ -1,15 +1,18 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use promon_config::{find_config, load_config};
-use promon_core::{AppSpec, Instances, PromonConfig};
+use promon_core::{AppSpec, Instances, PromonConfig, ResolvedAppSpec};
 use promon_logging::tail_file;
 use promon_node_support::validate_runtime;
 use promon_platform::{find_program, promon_home};
 use promon_process::{list_apps, restart_app, run_app_foreground, start_app, stop_all, stop_app};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
+
+type DesiredApps = Arc<Mutex<Vec<ResolvedAppSpec>>>;
 
 #[derive(Debug, Parser)]
 #[command(name = "promon", version, about = "Rust-first Node.js process manager")]
@@ -127,7 +130,9 @@ enum IpcRequest {
     List,
     Stop { name: String },
     Start { config: PathBuf },
+    StartApps { apps: Vec<ResolvedAppSpec> },
     Restart { config: PathBuf },
+    RestartApps { apps: Vec<ResolvedAppSpec> },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -223,6 +228,11 @@ async fn start(target: Option<PathBuf>, wait: bool, json: bool) -> Result<()> {
         return Ok(());
     }
 
+    if let Some(response) = try_daemon_request(IpcRequest::StartApps { apps: apps.clone() }).await?
+    {
+        return print_ipc_response(response, json);
+    }
+
     let mut started = Vec::new();
     for app in apps {
         validate_runtime(&app)?;
@@ -240,6 +250,10 @@ async fn start(target: Option<PathBuf>, wait: bool, json: bool) -> Result<()> {
 }
 
 async fn stop(name: String, json: bool) -> Result<()> {
+    if let Some(response) = try_daemon_request(IpcRequest::Stop { name: name.clone() }).await? {
+        return print_ipc_response(response, json);
+    }
+
     let stopped = if name == "all" {
         let stopped = stop_all().await?;
         if json {
@@ -268,6 +282,12 @@ async fn stop(name: String, json: bool) -> Result<()> {
 
 async fn restart(target: Option<PathBuf>, json: bool) -> Result<()> {
     let apps = resolve_apps(target).await?;
+    if let Some(response) =
+        try_daemon_request(IpcRequest::RestartApps { apps: apps.clone() }).await?
+    {
+        return print_ipc_response(response, json);
+    }
+
     let mut restarted = Vec::new();
     for app in apps {
         validate_runtime(&app)?;
@@ -288,6 +308,12 @@ async fn scale(target: PathBuf, instances: u16, json: bool) -> Result<()> {
     let mut apps = resolve_apps(Some(target)).await?;
     for app in &mut apps {
         app.instances = Instances::Count(instances.max(1));
+    }
+
+    if let Some(response) =
+        try_daemon_request(IpcRequest::RestartApps { apps: apps.clone() }).await?
+    {
+        return print_ipc_response(response, json);
     }
 
     let mut scaled = Vec::new();
@@ -395,6 +421,10 @@ async fn logs(name: Option<String>, lines: usize, follow: bool, json: bool) -> R
 }
 
 async fn list(json: bool) -> Result<()> {
+    if let Some(response) = try_daemon_request(IpcRequest::List).await? {
+        return print_ipc_response(response, json);
+    }
+
     let processes = list_apps().await?;
     if json {
         print_json(serde_json::json!({ "processes": processes }))?;
@@ -506,16 +536,7 @@ async fn daemon_status(json: bool) -> Result<()> {
 
 async fn daemon_ipc(request: IpcRequest, json: bool) -> Result<()> {
     let response = send_ipc(request).await?;
-    if json {
-        print_json(serde_json::to_value(response)?)?;
-    } else if response.ok {
-        println!("{}", serde_json::to_string_pretty(&response.payload)?);
-    } else {
-        anyhow::bail!(response
-            .error
-            .unwrap_or_else(|| "daemon request failed".to_string()));
-    }
-    Ok(())
+    print_ipc_response(response, json)
 }
 
 async fn daemon_run(config: PathBuf) -> Result<()> {
@@ -524,6 +545,7 @@ async fn daemon_run(config: PathBuf) -> Result<()> {
         validate_runtime(app)?;
         start_app(app).await?;
     }
+    let desired = Arc::new(Mutex::new(apps));
 
     let listener = bind_ipc().await?;
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -532,6 +554,7 @@ async fn daemon_run(config: PathBuf) -> Result<()> {
     loop {
         tokio::select! {
             _ = tick.tick() => {
+                let apps = desired.lock().await.clone();
                 for app in &apps {
                     let processes = list_apps().await?;
                     let alive = processes.iter().any(|process| {
@@ -544,9 +567,9 @@ async fn daemon_run(config: PathBuf) -> Result<()> {
             }
             result = accept_ipc(&listener) => {
                 if let Ok(stream) = result {
-                    let apps = apps.clone();
+                    let desired = desired.clone();
                     tokio::spawn(async move {
-                        let _ = handle_ipc(stream, apps).await;
+                        let _ = handle_ipc(stream, desired).await;
                     });
                 }
             }
@@ -657,7 +680,7 @@ async fn send_ipc(request: IpcRequest) -> Result<IpcResponse> {
     Ok(serde_json::from_str(&line)?)
 }
 
-async fn handle_ipc(stream: IpcStream, apps: Vec<promon_core::ResolvedAppSpec>) -> Result<()> {
+async fn handle_ipc(stream: IpcStream, desired: DesiredApps) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader.read_line(&mut line).await?;
@@ -679,82 +702,93 @@ async fn handle_ipc(stream: IpcStream, apps: Vec<promon_core::ResolvedAppSpec>) 
         IpcRequest::Stop { name } => {
             if name == "all" {
                 match stop_all().await {
-                    Ok(processes) => IpcResponse {
-                        ok: true,
-                        payload: serde_json::json!({ "stopped": processes }),
-                        error: None,
-                    },
+                    Ok(processes) => {
+                        desired.lock().await.clear();
+                        IpcResponse {
+                            ok: true,
+                            payload: serde_json::json!({ "stopped": processes }),
+                            error: None,
+                        }
+                    }
                     Err(error) => error_response(error.to_string()),
                 }
             } else {
                 match stop_app(&name).await {
-                    Ok(process) => IpcResponse {
-                        ok: true,
-                        payload: serde_json::json!({ "stopped": process }),
-                        error: None,
-                    },
+                    Ok(process) => {
+                        desired.lock().await.retain(|app| app.name != name);
+                        IpcResponse {
+                            ok: true,
+                            payload: serde_json::json!({ "stopped": process }),
+                            error: None,
+                        }
+                    }
                     Err(error) => error_response(error.to_string()),
                 }
             }
         }
         IpcRequest::Start { config } => match load_config(&config).await {
-            Ok(loaded) => {
-                let mut started = Vec::new();
-                let mut error = None;
-                for app in loaded {
-                    match start_app(&app).await {
-                        Ok(process) => started.push(process),
-                        Err(err) => {
-                            error = Some(err.to_string());
-                            break;
-                        }
-                    }
-                }
-                if let Some(error) = error {
-                    error_response(error)
-                } else {
-                    IpcResponse {
-                        ok: true,
-                        payload: serde_json::json!({ "started": started }),
-                        error: None,
-                    }
-                }
-            }
+            Ok(loaded) => start_desired_apps(loaded, desired.clone()).await,
             Err(error) => error_response(error.to_string()),
         },
+        IpcRequest::StartApps { apps } => start_desired_apps(apps, desired.clone()).await,
         IpcRequest::Restart { config } => match load_config(&config).await {
-            Ok(loaded) => {
-                let mut restarted = Vec::new();
-                let mut error = None;
-                for app in loaded {
-                    match restart_app(&app).await {
-                        Ok(process) => restarted.push(process),
-                        Err(err) => {
-                            error = Some(err.to_string());
-                            break;
-                        }
-                    }
-                }
-                if let Some(error) = error {
-                    error_response(error)
-                } else {
-                    IpcResponse {
-                        ok: true,
-                        payload: serde_json::json!({ "restarted": restarted }),
-                        error: None,
-                    }
-                }
-            }
+            Ok(loaded) => restart_desired_apps(loaded, desired.clone()).await,
             Err(error) => error_response(error.to_string()),
         },
+        IpcRequest::RestartApps { apps } => restart_desired_apps(apps, desired.clone()).await,
     };
 
     let mut stream = reader.into_inner();
     stream
         .write_all(format!("{}\n", serde_json::to_string(&response)?).as_bytes())
         .await?;
-    let _ = apps;
     Ok(())
+}
+
+async fn start_desired_apps(apps: Vec<ResolvedAppSpec>, desired: DesiredApps) -> IpcResponse {
+    let mut started = Vec::new();
+    for app in &apps {
+        if let Err(error) = validate_runtime(app) {
+            return error_response(error.to_string());
+        }
+        match start_app(app).await {
+            Ok(process) => started.push(process),
+            Err(error) => return error_response(error.to_string()),
+        }
+    }
+    merge_desired_apps(desired, apps).await;
+    IpcResponse {
+        ok: true,
+        payload: serde_json::json!({ "started": started }),
+        error: None,
+    }
+}
+
+async fn restart_desired_apps(apps: Vec<ResolvedAppSpec>, desired: DesiredApps) -> IpcResponse {
+    let mut restarted = Vec::new();
+    for app in &apps {
+        if let Err(error) = validate_runtime(app) {
+            return error_response(error.to_string());
+        }
+        match restart_app(app).await {
+            Ok(process) => restarted.push(process),
+            Err(error) => return error_response(error.to_string()),
+        }
+    }
+    merge_desired_apps(desired, apps).await;
+    IpcResponse {
+        ok: true,
+        payload: serde_json::json!({ "restarted": restarted }),
+        error: None,
+    }
+}
+
+async fn merge_desired_apps(desired: DesiredApps, apps: Vec<ResolvedAppSpec>) {
+    let mut locked = desired.lock().await;
+    for app in apps {
+        locked.retain(|existing| existing.name != app.name);
+        locked.push(app);
+    }
 }
 
 fn error_response(error: String) -> IpcResponse {
@@ -1136,6 +1170,26 @@ fn looks_like_config(path: &std::path::Path) -> bool {
 
 fn print_json(value: serde_json::Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+async fn try_daemon_request(request: IpcRequest) -> Result<Option<IpcResponse>> {
+    match send_ipc(request).await {
+        Ok(response) => Ok(Some(response)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn print_ipc_response(response: IpcResponse, json: bool) -> Result<()> {
+    if json {
+        print_json(serde_json::to_value(response)?)?;
+    } else if response.ok {
+        println!("{}", serde_json::to_string_pretty(&response.payload)?);
+    } else {
+        anyhow::bail!(response
+            .error
+            .unwrap_or_else(|| "daemon request failed".to_string()));
+    }
     Ok(())
 }
 

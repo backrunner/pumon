@@ -41,6 +41,10 @@ sleep 1
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon status
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon ping
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon list
+PROMON_HOME="$tmp_home" "$PROMON_BIN" list
+PROMON_HOME="$tmp_home" "$PROMON_BIN" restart examples/basic/ecosystem.config.json
+PROMON_HOME="$tmp_home" "$PROMON_BIN" stop basic-js
+PROMON_HOME="$tmp_home" "$PROMON_BIN" start examples/basic/ecosystem.config.json
 PROMON_HOME="$tmp_home" "$PROMON_BIN" daemon stop
 PROMON_HOME="$tmp_home" "$PROMON_BIN" list
 

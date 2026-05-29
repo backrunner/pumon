@@ -231,16 +231,29 @@ fn next_cron_delay(value: &str) -> PromonResult<Duration> {
     let days = parse_cron_field(fields[2], 1, 31)?;
     let months = parse_cron_field(fields[3], 1, 12)?;
     let weekdays = parse_cron_field(fields[4], 0, 7)?;
+    let day_is_wildcard = fields[2] == "*";
+    let weekday_is_wildcard = fields[4] == "*";
     let now = chrono::Local::now();
 
     for offset in 1..=(366 * 24 * 60) {
         let candidate = now + chrono::Duration::minutes(offset);
         let weekday = candidate.weekday().num_days_from_sunday();
+        let day_matches = days.contains(&candidate.day());
+        let weekday_matches =
+            weekdays.contains(&weekday) || (weekday == 0 && weekdays.contains(&7));
+        let calendar_day_matches = if day_is_wildcard && weekday_is_wildcard {
+            true
+        } else if day_is_wildcard {
+            weekday_matches
+        } else if weekday_is_wildcard {
+            day_matches
+        } else {
+            day_matches || weekday_matches
+        };
         if minutes.contains(&candidate.minute())
             && hours.contains(&candidate.hour())
-            && days.contains(&candidate.day())
             && months.contains(&candidate.month())
-            && (weekdays.contains(&weekday) || (weekday == 0 && weekdays.contains(&7)))
+            && calendar_day_matches
         {
             let delay = candidate
                 .signed_duration_since(now)
