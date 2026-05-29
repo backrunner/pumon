@@ -4,15 +4,15 @@ set -euo pipefail
 version="${1:?version required}"
 target="${2:?target required}"
 archive="${3:?archive extension required}"
-binary="target/${target}/release/promon"
+binary="target/${target}/release/pumon"
 dist="dist"
-name="promon-v${version}-${target}"
+name="pumon-v${version}-${target}"
 
 mkdir -p "$dist/$name"
 if [[ "$target" == *windows* ]]; then
-  cp "${binary}.exe" "$dist/$name/promon.exe"
+  cp "${binary}.exe" "$dist/$name/pumon.exe"
 else
-  cp "$binary" "$dist/$name/promon"
+  cp "$binary" "$dist/$name/pumon"
 fi
 cp LICENSE README.md "$dist/$name/"
 

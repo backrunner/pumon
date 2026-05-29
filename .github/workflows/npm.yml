@@ -23,7 +23,7 @@ jobs:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
       - run: npm publish --tag "${{ inputs.tag }}"
-        working-directory: packages/promon
+        working-directory: packages/pumon
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
