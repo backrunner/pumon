@@ -468,6 +468,21 @@ async fn daemon(command: DaemonCommand, json: bool) -> Result<()> {
 
 async fn daemon_start(config: Option<PathBuf>, json: bool) -> Result<()> {
     let config = resolve_config(config)?;
+    if let Ok(response) = send_ipc(IpcRequest::Ping).await {
+        if response.ok {
+            let pid = daemon_pid().await;
+            if json {
+                print_json(serde_json::json!({ "already_running": true, "pid": pid }))?;
+            } else {
+                println!(
+                    "promon daemon already running{}",
+                    pid.map(|pid| format!(" pid={pid}")).unwrap_or_default()
+                );
+            }
+            return Ok(());
+        }
+    }
+
     let exe = std::env::current_exe()?;
     let dir = promon_home().join("daemon");
     tokio::fs::create_dir_all(&dir).await?;
@@ -486,6 +501,7 @@ async fn daemon_start(config: Option<PathBuf>, json: bool) -> Result<()> {
         .spawn()?;
     let pid = child.id();
     tokio::fs::write(dir.join("daemon.pid"), pid.to_string()).await?;
+    wait_for_daemon_ready().await?;
     if json {
         print_json(serde_json::json!({ "pid": pid, "config": config }))?;
     } else {
@@ -515,23 +531,44 @@ async fn daemon_stop(json: bool) -> Result<()> {
 }
 
 async fn daemon_status(json: bool) -> Result<()> {
-    let pid_path = promon_home().join("daemon").join("daemon.pid");
-    let pid = tokio::fs::read_to_string(&pid_path)
-        .await
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u32>().ok());
+    let pid = daemon_pid().await;
     let running = pid.map(promon_platform::is_process_alive).unwrap_or(false);
+    let ipc = send_ipc(IpcRequest::Ping)
+        .await
+        .map(|response| response.ok)
+        .unwrap_or(false);
     if json {
-        print_json(serde_json::json!({ "pid": pid, "running": running }))?;
+        print_json(serde_json::json!({ "pid": pid, "running": running, "ipc": ipc }))?;
     } else if let Some(pid) = pid {
         println!(
-            "promon daemon pid={pid} {}",
-            if running { "running" } else { "stale" }
+            "promon daemon pid={pid} {} ipc={}",
+            if running { "running" } else { "stale" },
+            if ipc { "ready" } else { "unavailable" }
         );
     } else {
         println!("promon daemon not started");
     }
     Ok(())
+}
+
+async fn daemon_pid() -> Option<u32> {
+    let pid_path = promon_home().join("daemon").join("daemon.pid");
+    tokio::fs::read_to_string(&pid_path)
+        .await
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+}
+
+async fn wait_for_daemon_ready() -> Result<()> {
+    for _ in 0..50 {
+        if let Ok(response) = send_ipc(IpcRequest::Ping).await {
+            if response.ok {
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("daemon did not become ready within 5 seconds")
 }
 
 async fn daemon_ipc(request: IpcRequest, json: bool) -> Result<()> {
@@ -958,8 +995,8 @@ fn service_file_content(exe: &std::path::Path, config: &std::path::Path) -> Resu
     {
         return Ok(format!(
             "[Unit]\nDescription=Promon process supervisor\n\n[Service]\nExecStart={} daemon run {}\nRestart=always\n\n[Install]\nWantedBy=default.target\n",
-            exe.display(),
-            config.display()
+            systemd_quote(exe),
+            systemd_quote(config)
         ));
     }
 
@@ -971,6 +1008,16 @@ fn service_file_content(exe: &std::path::Path, config: &std::path::Path) -> Resu
             config.display()
         ));
     }
+}
+
+#[cfg(target_os = "linux")]
+fn systemd_quote(path: &std::path::Path) -> String {
+    let value = path
+        .display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    format!("\"{value}\"")
 }
 
 async fn service_start_command(path: &std::path::Path) -> Result<String> {
