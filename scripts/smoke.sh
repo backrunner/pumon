@@ -5,6 +5,7 @@ cargo build -p promon-cli
 
 PROMON_BIN="${PROMON_BIN:-target/debug/promon}"
 "$PROMON_BIN" --version
+"$PROMON_BIN" tui --help
 "$PROMON_BIN" doctor
 "$PROMON_BIN" validate examples/basic/ecosystem.config.json
 "$PROMON_BIN" validate examples/typescript/ecosystem.config.ts

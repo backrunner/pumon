@@ -1,10 +1,17 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{io, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use promon_config::{find_config, load_config};
-use promon_core::{AppSpec, Instances, ManagedProcess, PromonConfig, ResolvedAppSpec};
+use promon_core::{
+    AppSpec, ExecMode, Instances, ManagedProcess, ProcessStatus, PromonConfig, ResolvedAppSpec,
+};
 use promon_logging::tail_file;
 use promon_node_support::validate_runtime;
 use promon_platform::{find_program, promon_home};
@@ -13,6 +20,13 @@ use promon_process::{
     restart_app, restart_app_supervised, run_app_foreground, save_desired_apps, scale_app,
     scale_app_supervised, start_app, start_app_supervised, stop_all, stop_app,
     validate_restart_policy,
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    Frame, Terminal,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -91,7 +105,9 @@ enum Commands {
         #[arg(long, default_value_t = 1000)]
         interval_ms: u64,
     },
-    Tui,
+    Tui {
+        config: Option<PathBuf>,
+    },
     List,
 }
 
@@ -119,7 +135,7 @@ async fn main() -> Result<()> {
             target,
             interval_ms,
         } => watch(target, interval_ms, cli.json).await,
-        Commands::Tui => tui().await,
+        Commands::Tui { config } => tui(config).await,
         Commands::List => list(cli.json).await,
     }
 }
@@ -795,33 +811,492 @@ async fn daemon_run(config: PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn tui() -> Result<()> {
+async fn tui(config: Option<PathBuf>) -> Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    let result = run_tui(&mut terminal, config).await;
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    result
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuiFocus {
+    Processes,
+    ConfigApps,
+}
+
+struct TuiModel {
+    processes: Vec<ManagedProcess>,
+    config_apps: Vec<ResolvedAppSpec>,
+    focus: TuiFocus,
+    selected_process: usize,
+    selected_config_app: usize,
+    logs: Vec<String>,
+    message: String,
+}
+
+async fn run_tui(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    config: Option<PathBuf>,
+) -> Result<()> {
+    let (config_apps, message) = load_tui_config_apps(config).await?;
+    let mut model = TuiModel {
+        processes: Vec::new(),
+        config_apps,
+        focus: TuiFocus::Processes,
+        selected_process: 0,
+        selected_config_app: 0,
+        logs: Vec::new(),
+        message,
+    };
+    refresh_tui_model(&mut model).await?;
+    let mut last_refresh = std::time::Instant::now();
+
     loop {
-        print!("\x1b[2J\x1b[H");
-        println!("Promon TUI");
-        println!("Press Ctrl+C to exit\n");
-        let processes = list_apps().await?;
-        if processes.is_empty() {
-            println!("No managed processes");
-        } else {
-            println!("{:<24} {:<8} {:<10} Command", "Name", "PID", "Status");
-            for process in processes {
-                println!(
-                    "{:<24} {:<8} {:<10} {}",
-                    process.name,
-                    process.pid,
-                    format!("{:?}", process.status).to_lowercase(),
-                    process.command.display_command()
-                );
+        terminal.draw(|frame| render_tui(frame, &model))?;
+        if event::poll(std::time::Duration::from_millis(150))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Tab if !model.config_apps.is_empty() => {
+                        model.focus = match model.focus {
+                            TuiFocus::Processes => TuiFocus::ConfigApps,
+                            TuiFocus::ConfigApps => TuiFocus::Processes,
+                        };
+                    }
+                    KeyCode::Up => move_tui_selection(&mut model, -1),
+                    KeyCode::Down => move_tui_selection(&mut model, 1),
+                    KeyCode::Char('a') => {
+                        model.message = tui_start_all(&model.config_apps).await;
+                        refresh_tui_model(&mut model).await?;
+                    }
+                    KeyCode::Char('s') => {
+                        model.message = tui_start_selected(&model).await;
+                        refresh_tui_model(&mut model).await?;
+                    }
+                    KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
+                        model.message = tui_stop_selected(&model).await;
+                        refresh_tui_model(&mut model).await?;
+                    }
+                    KeyCode::Char('r') => {
+                        model.message = tui_restart_selected(&model).await;
+                        refresh_tui_model(&mut model).await?;
+                    }
+                    KeyCode::Char('l') => {
+                        model.message = tui_reload_selected(&model).await;
+                        refresh_tui_model(&mut model).await?;
+                    }
+                    KeyCode::Char('R') => {
+                        model.message = "refreshed".to_string();
+                        refresh_tui_model(&mut model).await?;
+                    }
+                    _ => {}
+                }
+                last_refresh = std::time::Instant::now();
             }
         }
 
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+        if last_refresh.elapsed() >= std::time::Duration::from_secs(1) {
+            refresh_tui_model(&mut model).await?;
+            last_refresh = std::time::Instant::now();
         }
     }
     Ok(())
+}
+
+async fn load_tui_config_apps(config: Option<PathBuf>) -> Result<(Vec<ResolvedAppSpec>, String)> {
+    if let Some(config) = config {
+        return Ok((
+            resolve_apps(Some(config)).await?,
+            "config loaded".to_string(),
+        ));
+    }
+
+    match resolve_config(None) {
+        Ok(config) => Ok((
+            load_config(&config).await?,
+            format!("config loaded from {}", config.display()),
+        )),
+        Err(_) => Ok((
+            Vec::new(),
+            "no config loaded; pass promon tui <config> for start/restart/reload actions"
+                .to_string(),
+        )),
+    }
+}
+
+async fn refresh_tui_model(model: &mut TuiModel) -> Result<()> {
+    model.processes = current_processes().await.unwrap_or_default();
+    if model.selected_process >= model.processes.len() {
+        model.selected_process = model.processes.len().saturating_sub(1);
+    }
+    if model.selected_config_app >= model.config_apps.len() {
+        model.selected_config_app = model.config_apps.len().saturating_sub(1);
+    }
+    model.logs = selected_tui_logs(model)
+        .await
+        .unwrap_or_else(|error| vec![format!("failed to read logs: {error}")]);
+    Ok(())
+}
+
+fn move_tui_selection(model: &mut TuiModel, delta: isize) {
+    let len = match model.focus {
+        TuiFocus::Processes => model.processes.len(),
+        TuiFocus::ConfigApps => model.config_apps.len(),
+    };
+    if len == 0 {
+        return;
+    }
+    let current = match model.focus {
+        TuiFocus::Processes => model.selected_process,
+        TuiFocus::ConfigApps => model.selected_config_app,
+    };
+    let next = (current as isize + delta).clamp(0, len as isize - 1) as usize;
+    match model.focus {
+        TuiFocus::Processes => model.selected_process = next,
+        TuiFocus::ConfigApps => model.selected_config_app = next,
+    }
+}
+
+async fn selected_tui_logs(model: &TuiModel) -> Result<Vec<String>> {
+    let Some(process) = model.processes.get(model.selected_process) else {
+        return Ok(vec!["no selected process".to_string()]);
+    };
+    let mut lines = Vec::new();
+    lines.push(format!("stdout {}", process.out_log.display()));
+    lines.extend(
+        tail_file(&process.out_log, 10)
+            .await?
+            .into_iter()
+            .map(|line| format!("out | {line}")),
+    );
+    if process.err_log != process.out_log {
+        lines.push(format!("stderr {}", process.err_log.display()));
+        lines.extend(
+            tail_file(&process.err_log, 8)
+                .await?
+                .into_iter()
+                .map(|line| format!("err | {line}")),
+        );
+    }
+    Ok(lines)
+}
+
+fn render_tui(frame: &mut Frame<'_>, model: &TuiModel) {
+    let area = frame.area();
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(3),
+        ])
+        .split(area);
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(vertical[1]);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(body[0]);
+
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Promon TUI  |  {} process(es)  |  {} config app(s)",
+            model.processes.len(),
+            model.config_apps.len()
+        ))
+        .block(Block::default().borders(Borders::ALL)),
+        vertical[0],
+    );
+    render_process_table(frame, left[0], model);
+    render_config_table(frame, left[1], model);
+    render_detail_panel(frame, body[1], model);
+    frame.render_widget(
+        Paragraph::new(format!(
+            "Tab switch  Up/Down select  a start all  s start  x stop  r restart  l reload  R refresh  q quit  |  {}",
+            model.message
+        ))
+        .wrap(Wrap { trim: true })
+        .block(Block::default().borders(Borders::ALL)),
+        vertical[2],
+    );
+}
+
+fn render_process_table(frame: &mut Frame<'_>, area: Rect, model: &TuiModel) {
+    let rows = model.processes.iter().map(|process| {
+        Row::new([
+            Cell::from(process.name.clone()),
+            Cell::from(process.pid.to_string()),
+            Cell::from(process_status_label(&process.status)),
+            Cell::from(process.command.display_command()),
+        ])
+    });
+    let title = if model.focus == TuiFocus::Processes {
+        "Processes *"
+    } else {
+        "Processes"
+    };
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(22),
+            Constraint::Length(8),
+            Constraint::Length(9),
+            Constraint::Min(20),
+        ],
+    )
+    .header(
+        Row::new(["Name", "PID", "Status", "Command"]).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    )
+    .block(Block::default().title(title).borders(Borders::ALL))
+    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    let mut state = TableState::default();
+    if !model.processes.is_empty() {
+        state.select(Some(model.selected_process));
+    }
+    frame.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_config_table(frame: &mut Frame<'_>, area: Rect, model: &TuiModel) {
+    let rows = model.config_apps.iter().map(|app| {
+        Row::new([
+            Cell::from(app.name.clone()),
+            Cell::from(exec_mode_label(app.exec_mode)),
+            Cell::from(instances_label(&app.instances)),
+            Cell::from(app.cwd.display().to_string()),
+        ])
+    });
+    let title = if model.focus == TuiFocus::ConfigApps {
+        "Config Apps *"
+    } else {
+        "Config Apps"
+    };
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(22),
+            Constraint::Length(8),
+            Constraint::Length(9),
+            Constraint::Min(20),
+        ],
+    )
+    .header(
+        Row::new(["Name", "Mode", "Instances", "CWD"]).style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+    )
+    .block(Block::default().title(title).borders(Borders::ALL))
+    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    let mut state = TableState::default();
+    if !model.config_apps.is_empty() {
+        state.select(Some(model.selected_config_app));
+    }
+    frame.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_detail_panel(frame: &mut Frame<'_>, area: Rect, model: &TuiModel) {
+    let mut text = Vec::new();
+    if let Some(process) = model.processes.get(model.selected_process) {
+        text.push(format!("Name: {}", process.name));
+        text.push(format!("PID: {}", process.pid));
+        text.push(format!("Status: {}", process_status_label(&process.status)));
+        text.push(format!("CWD: {}", process.cwd.display()));
+        text.push(format!("Started: {}", process.started_at));
+        text.push(String::new());
+    }
+    text.extend(model.logs.iter().cloned());
+    frame.render_widget(
+        Paragraph::new(text.join("\n"))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title("Details / Logs")
+                    .borders(Borders::ALL),
+            ),
+        area,
+    );
+}
+
+fn process_status_label(status: &ProcessStatus) -> String {
+    format!("{status:?}").to_lowercase()
+}
+
+fn exec_mode_label(mode: ExecMode) -> &'static str {
+    match mode {
+        ExecMode::Fork => "fork",
+        ExecMode::Cluster => "cluster",
+    }
+}
+
+fn instances_label(instances: &Instances) -> String {
+    match instances {
+        Instances::Count(value) => value.to_string(),
+        Instances::Max(value) => value.clone(),
+    }
+}
+
+async fn tui_start_all(apps: &[ResolvedAppSpec]) -> String {
+    if apps.is_empty() {
+        return "no config apps loaded".to_string();
+    }
+    match manage_start_apps(apps.to_vec()).await {
+        Ok(count) => format!("started {count} app(s)"),
+        Err(error) => format!("start failed: {error}"),
+    }
+}
+
+async fn tui_start_selected(model: &TuiModel) -> String {
+    let Some(app) = selected_tui_app(model) else {
+        return "no config app selected".to_string();
+    };
+    match manage_start_apps(vec![app.clone()]).await {
+        Ok(_) => format!("started {}", app.name),
+        Err(error) => format!("start failed: {error}"),
+    }
+}
+
+async fn tui_stop_selected(model: &TuiModel) -> String {
+    let Some(process) = model.processes.get(model.selected_process) else {
+        return "no process selected".to_string();
+    };
+    match manage_stop_process(&process.name).await {
+        Ok(true) => format!("stopped {}", process.name),
+        Ok(false) => format!("no managed process named {}", process.name),
+        Err(error) => format!("stop failed: {error}"),
+    }
+}
+
+async fn tui_restart_selected(model: &TuiModel) -> String {
+    let Some(app) = selected_tui_app(model) else {
+        return "restart requires a loaded config app".to_string();
+    };
+    match manage_restart_apps(vec![app.clone()]).await {
+        Ok(_) => format!("restarted {}", app.name),
+        Err(error) => format!("restart failed: {error}"),
+    }
+}
+
+async fn tui_reload_selected(model: &TuiModel) -> String {
+    let Some(app) = selected_tui_app(model) else {
+        return "reload requires a loaded config app".to_string();
+    };
+    match manage_reload_apps(vec![app.clone()]).await {
+        Ok(_) => format!("reloaded {}", app.name),
+        Err(error) => format!("reload failed: {error}"),
+    }
+}
+
+fn selected_tui_app(model: &TuiModel) -> Option<&ResolvedAppSpec> {
+    match model.focus {
+        TuiFocus::ConfigApps => model.config_apps.get(model.selected_config_app),
+        TuiFocus::Processes => {
+            let process = model.processes.get(model.selected_process)?;
+            model
+                .config_apps
+                .iter()
+                .find(|app| app.name == process.name)
+        }
+    }
+}
+
+async fn manage_start_apps(apps: Vec<ResolvedAppSpec>) -> Result<usize> {
+    for app in &apps {
+        validate_app(app)?;
+    }
+    if let Some(response) = try_daemon_request(IpcRequest::StartApps { apps: apps.clone() }).await?
+    {
+        return ipc_payload_count(response, "started");
+    }
+    let mut count = 0;
+    for app in &apps {
+        start_app(app).await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn manage_restart_apps(apps: Vec<ResolvedAppSpec>) -> Result<usize> {
+    for app in &apps {
+        validate_app(app)?;
+    }
+    if let Some(response) =
+        try_daemon_request(IpcRequest::RestartApps { apps: apps.clone() }).await?
+    {
+        return ipc_payload_count(response, "restarted");
+    }
+    let mut count = 0;
+    for app in &apps {
+        restart_app(app).await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn manage_reload_apps(apps: Vec<ResolvedAppSpec>) -> Result<usize> {
+    for app in &apps {
+        validate_app(app)?;
+    }
+    if let Some(response) =
+        try_daemon_request(IpcRequest::ReloadApps { apps: apps.clone() }).await?
+    {
+        return ipc_payload_count(response, "reloaded");
+    }
+    let mut count = 0;
+    for app in &apps {
+        reload_app(app).await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+async fn manage_stop_process(name: &str) -> Result<bool> {
+    if let Some(response) = try_daemon_request(IpcRequest::Stop {
+        name: name.to_string(),
+    })
+    .await?
+    {
+        let payload = ensure_ipc_ok(response)?;
+        return Ok(!payload
+            .get("stopped")
+            .map(serde_json::Value::is_null)
+            .unwrap_or(false));
+    }
+    Ok(stop_app(name).await?.is_some())
+}
+
+fn ipc_payload_count(response: IpcResponse, key: &str) -> Result<usize> {
+    let payload = ensure_ipc_ok(response)?;
+    Ok(payload
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(Vec::len)
+        .unwrap_or(0))
+}
+
+fn ensure_ipc_ok(response: IpcResponse) -> Result<serde_json::Value> {
+    if response.ok {
+        Ok(response.payload)
+    } else {
+        anyhow::bail!(response
+            .error
+            .unwrap_or_else(|| "daemon request failed".to_string()));
+    }
 }
 
 #[cfg(unix)]

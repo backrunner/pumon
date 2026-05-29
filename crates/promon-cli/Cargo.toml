@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+crossterm.workspace = true
 globset.workspace = true
 promon-config = { path = "../promon-config" }
 promon-core = { path = "../promon-core" }
@@ -19,6 +20,7 @@ promon-logging = { path = "../promon-logging" }
 promon-node-support = { path = "../promon-node-support" }
 promon-platform = { path = "../promon-platform" }
 promon-process = { path = "../promon-process" }
+ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
