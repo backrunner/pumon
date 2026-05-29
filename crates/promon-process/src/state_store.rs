@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use fs2::FileExt;
 use promon_core::{ManagedProcess, PromonError, PromonResult, ResolvedAppSpec};
 use promon_platform::state_dir;
 use serde::{de::DeserializeOwned, Serialize};
@@ -16,56 +17,97 @@ fn desired_state_file() -> PathBuf {
 }
 
 pub async fn load_processes() -> PromonResult<Vec<ManagedProcess>> {
-    load_json_vec(state_file(), "processes").await
+    let path = state_file();
+    let _lock = StateFileLock::acquire(&path).await?;
+    load_json_vec_unlocked(&path, "processes").await
 }
 
 pub async fn save_processes(processes: &[ManagedProcess]) -> PromonResult<()> {
-    save_json(state_file(), processes).await
+    let path = state_file();
+    let _lock = StateFileLock::acquire(&path).await?;
+    save_json_unlocked(&path, processes).await
 }
 
 pub async fn load_desired_apps() -> PromonResult<Vec<ResolvedAppSpec>> {
-    load_json_vec(desired_state_file(), "desired-apps").await
+    let path = desired_state_file();
+    let _lock = StateFileLock::acquire(&path).await?;
+    load_json_vec_unlocked(&path, "desired-apps").await
 }
 
 pub async fn save_desired_apps(apps: &[ResolvedAppSpec]) -> PromonResult<()> {
-    save_json(desired_state_file(), apps).await
+    let path = desired_state_file();
+    let _lock = StateFileLock::acquire(&path).await?;
+    save_json_unlocked(&path, apps).await
 }
 
 pub async fn upsert_process(process: ManagedProcess) -> PromonResult<()> {
-    let mut processes = load_processes().await?;
+    let path = state_file();
+    let _lock = StateFileLock::acquire(&path).await?;
+    let mut processes: Vec<ManagedProcess> = load_json_vec_unlocked(&path, "processes").await?;
     processes.retain(|item| item.name != process.name);
     processes.push(process);
-    save_processes(&processes).await
+    save_json_unlocked(&path, &processes).await
 }
 
 pub async fn remove_process(name: &str) -> PromonResult<Option<ManagedProcess>> {
-    let mut processes = load_processes().await?;
+    let path = state_file();
+    let _lock = StateFileLock::acquire(&path).await?;
+    let mut processes: Vec<ManagedProcess> = load_json_vec_unlocked(&path, "processes").await?;
     let removed = processes
         .iter()
         .position(|item| item.name == name)
         .map(|index| processes.remove(index));
-    save_processes(&processes).await?;
+    save_json_unlocked(&path, &processes).await?;
     Ok(removed)
 }
 
-async fn load_json_vec<T>(path: PathBuf, backup_prefix: &str) -> PromonResult<Vec<T>>
+struct StateFileLock(std::fs::File);
+
+impl StateFileLock {
+    async fn acquire(path: &Path) -> PromonResult<Self> {
+        let dir = state_dir();
+        fs::create_dir_all(&dir).await.map_err(PromonError::Io)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(lock_path(path))
+            .map_err(PromonError::Io)?;
+        file.lock_exclusive().map_err(PromonError::Io)?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for StateFileLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
+fn lock_path(path: &Path) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(".lock");
+    PathBuf::from(value)
+}
+
+async fn load_json_vec_unlocked<T>(path: &Path, backup_prefix: &str) -> PromonResult<Vec<T>>
 where
     T: DeserializeOwned,
 {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw = fs::read_to_string(&path).await.map_err(PromonError::Io)?;
+    let raw = fs::read_to_string(path).await.map_err(PromonError::Io)?;
     match serde_json::from_str(&raw) {
         Ok(processes) => Ok(processes),
         Err(_) => {
-            backup_corrupt_state(&path, backup_prefix, &raw).await?;
+            backup_corrupt_state(path, backup_prefix, &raw).await?;
             Ok(Vec::new())
         }
     }
 }
 
-async fn save_json<T>(path: PathBuf, value: &T) -> PromonResult<()>
+async fn save_json_unlocked<T>(path: &Path, value: &T) -> PromonResult<()>
 where
     T: Serialize + ?Sized,
 {
