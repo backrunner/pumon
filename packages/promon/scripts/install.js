@@ -1,3 +1,4 @@
 #!/usr/bin/env node
-console.log("Promon MVP uses the local cargo-built binary. Release downloads will be added in the release phase.");
-
+// Install-time downloads are intentionally best-effort. The bin wrapper also
+// downloads on first run so npm --ignore-scripts remains supported.
+console.log("Promon will resolve its native binary on first run if no local cargo build exists.");

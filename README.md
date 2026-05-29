@@ -11,5 +11,15 @@ This repository currently contains the first MVP implementation:
 - `promon stop`
 - `promon list`
 
-The daemon, service integration, cluster mode, watch mode, log rotation, and TUI are planned in later phases.
+Current implemented surface:
 
+- JavaScript/TypeScript ecosystem config loading.
+- Fork mode process start/stop/restart/list.
+- Foreground supervision with restart, memory threshold, and interval restart.
+- Cluster mode through the bundled Node cluster shim.
+- Log capture, tailing, follow mode, and size-based rotation.
+- Polling watch mode.
+- User-level service definition generation.
+- Background daemon wrapper for `start --wait`.
+- Minimal terminal process dashboard.
+- GitHub Release and npm wrapper scaffolding.

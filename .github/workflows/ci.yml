@@ -18,6 +18,7 @@ jobs:
       - run: cargo test --workspace
       - run: npm --prefix packages/node-support install
       - run: npm --prefix packages/node-support run build
+      - run: npm --prefix packages/cluster-shim test
       - run: cargo build -p promon-cli
       - run: node packages/promon/bin/promon.js --version
-
+      - run: scripts/smoke.sh

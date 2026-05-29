@@ -1,13 +1,13 @@
 {
   "name": "promon",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "bin": {
     "promon": "bin/promon.js"
   },
   "scripts": {
+    "install": "node scripts/install.js",
     "test": "node bin/promon.js --version"
   },
   "type": "module"
 }
-

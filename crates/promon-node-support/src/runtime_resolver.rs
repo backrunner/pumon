@@ -1,11 +1,17 @@
 use std::path::{Path, PathBuf};
 
-use promon_core::{PromonError, PromonResult, ResolvedAppSpec, RuntimeCommand};
+use promon_core::{
+    ExecMode, Instances, PromonError, PromonResult, ResolvedAppSpec, RuntimeCommand,
+};
 use promon_platform::find_program;
 
 use crate::{package_manager_from_package_json, read_package_json};
 
 pub fn resolve_runtime_command(app: &ResolvedAppSpec) -> PromonResult<RuntimeCommand> {
+    if app.exec_mode == ExecMode::Cluster {
+        return resolve_cluster(app);
+    }
+
     if app.package_script.is_some() {
         return resolve_package_script(app);
     }
@@ -15,6 +21,92 @@ pub fn resolve_runtime_command(app: &ResolvedAppSpec) -> PromonResult<RuntimeCom
     }
 
     resolve_script(app)
+}
+
+fn resolve_cluster(app: &ResolvedAppSpec) -> PromonResult<RuntimeCommand> {
+    let node = find_program("node", Some(&app.cwd))
+        .ok_or_else(|| PromonError::Runtime("node not found for cluster mode".to_string()))?;
+    let shim = cluster_shim_path()?;
+    let worker = resolve_worker_plan(app)?;
+    let spec = serde_json::json!({
+        "name": app.name,
+        "instances": resolve_instances(&app.instances),
+        "worker": worker,
+    });
+
+    Ok(RuntimeCommand {
+        program: node,
+        args: vec![
+            shim.to_string_lossy().to_string(),
+            serde_json::to_string(&spec).map_err(PromonError::Json)?,
+        ],
+        cwd: app.cwd.clone(),
+        env: app.env.clone(),
+    })
+}
+
+fn resolve_worker_plan(app: &ResolvedAppSpec) -> PromonResult<serde_json::Value> {
+    let script = app
+        .script
+        .as_ref()
+        .ok_or_else(|| PromonError::Runtime(format!("cluster app {} requires script", app.name)))?;
+    let script_path = absolutize(&app.cwd, script);
+    if !script_path.exists() {
+        return Err(PromonError::Runtime(format!(
+            "script not found for {}: {}",
+            app.name,
+            script_path.display()
+        )));
+    }
+    Ok(serde_json::json!({
+        "script": script_path,
+        "args": app.args,
+        "nodeArgs": app.node_args,
+        "interpreter": app.interpreter,
+        "interpreterArgs": app.interpreter_args,
+        "cwd": app.cwd,
+        "env": app.env,
+    }))
+}
+
+fn cluster_shim_path() -> PromonResult<PathBuf> {
+    if let Some(path) = std::env::var_os("PROMON_CLUSTER_SHIM").map(PathBuf::from) {
+        if path.exists() {
+            return Ok(path);
+        }
+        return Err(PromonError::Runtime(format!(
+            "PROMON_CLUSTER_SHIM points to missing file: {}",
+            path.display()
+        )));
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .ok_or_else(|| PromonError::Runtime("cannot resolve workspace root".to_string()))?;
+    let shim = workspace
+        .join("packages")
+        .join("cluster-shim")
+        .join("dist")
+        .join("index.js");
+    if shim.exists() {
+        Ok(shim)
+    } else {
+        Err(PromonError::Runtime(format!(
+            "cluster shim not found at {}",
+            shim.display()
+        )))
+    }
+}
+
+fn resolve_instances(instances: &Instances) -> usize {
+    match instances {
+        Instances::Count(value) => (*value).max(1) as usize,
+        Instances::Max(_) => std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(1),
+    }
 }
 
 pub fn validate_runtime(app: &ResolvedAppSpec) -> PromonResult<()> {

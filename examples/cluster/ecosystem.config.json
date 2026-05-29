@@ -1,0 +1,14 @@
+{
+  "apps": [
+    {
+      "name": "cluster-js",
+      "script": "server.js",
+      "cwd": ".",
+      "exec_mode": "cluster",
+      "instances": 2,
+      "env": {
+        "PORT": "3104"
+      }
+    }
+  ]
+}

@@ -46,6 +46,41 @@ pub fn is_process_alive(pid: u32) -> bool {
     }
 }
 
+pub fn process_command(pid: u32) -> Option<String> {
+    #[cfg(unix)]
+    {
+        std::process::Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+
+    #[cfg(windows)]
+    {
+        std::process::Command::new("wmic")
+            .args([
+                "process",
+                "where",
+                &format!("ProcessId={pid}"),
+                "get",
+                "CommandLine",
+                "/value",
+            ])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+}
+
 pub async fn terminate_process(pid: u32) -> std::io::Result<()> {
     #[cfg(unix)]
     {

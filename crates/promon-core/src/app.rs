@@ -41,6 +41,13 @@ pub struct LogPolicy {
     pub out_file: Option<PathBuf>,
     pub err_file: Option<PathBuf>,
     pub merge: Option<bool>,
+    pub max_size_bytes: Option<u64>,
+    #[serde(default = "default_log_retain")]
+    pub retain: usize,
+}
+
+fn default_log_retain() -> usize {
+    5
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
